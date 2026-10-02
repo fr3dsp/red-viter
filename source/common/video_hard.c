@@ -5,6 +5,7 @@
 #include "v810_cpu.h"
 #include "v810_mem.h"
 #include "vb_set.h"
+#include "render_thread.h"
 #include "video_hard.h"
 
 AffineCacheEntry tileMapCache[AFFINE_CACHE_SIZE];
@@ -92,7 +93,7 @@ int render_affine_cache(int mapid, vertex *vbuf, vertex *vcur, int umin, int uma
 	int xend = uwrap ? 511 : uumax;
 	int yend = vwrap ? 511 : vvmax;
 
-	u16 *tilemap = (u16 *)(vb_state->V810_DISPLAY_RAM.off + 0x20000 + 8192 * (mapid));
+	u16 *tilemap = (u16 *)(rvb->V810_DISPLAY_RAM.off + 0x20000 + 8192 * (mapid));
 	for (int y = ystart; y <= yend; y += 8) {
 		if (vwrap && !(y >= vvmin || y <= vvmax)) continue;
 		bool new_row = force_redraw || (old_vmax - old_vmin < 512 && (y < (old_vmin & ~7) || y > old_vmax));
@@ -104,8 +105,8 @@ int render_affine_cache(int mapid, vertex *vbuf, vertex *vcur, int umin, int uma
 
 			if (!(new_row || (old_umax - old_umin < 512 && (x < (old_umin & ~7) || x > old_umax))
 				|| cache->tiles[(y << 3) + (x >> 3)] != tile
-				|| tDSPCACHE.CharacterCache[tileid]
-				|| cache->GPLT[tile >> 14] != vb_state->tVIPREG.GPLT[tile >> 14]
+				|| rdsp->CharacterCache[tileid]
+				|| cache->GPLT[tile >> 14] != rvb->tVIPREG.GPLT[tile >> 14]
 			)) continue;
 			cache->tiles[(y << 3) + (x >> 3)] = tile;
 
@@ -168,7 +169,7 @@ void video_hard_render(int drawn_fb) {
 
 	gpu_setup_tile_drawing();
 
-	WORLD *worlds = (WORLD *)(vb_state->V810_DISPLAY_RAM.off + 0x3d800);
+	WORLD *worlds = (WORLD *)(rvb->V810_DISPLAY_RAM.off + 0x3d800);
 
 	uint8_t object_group_id = 3;
 
@@ -202,7 +203,7 @@ void video_hard_render(int drawn_fb) {
 			int16_t h = worlds[wrld].h + 1;
 			int16_t over_tile = worlds[wrld].over & 0x7ff;
 
-			u16 *tilemap = (u16 *)(vb_state->V810_DISPLAY_RAM.off + 0x20000);
+			u16 *tilemap = (u16 *)(rvb->V810_DISPLAY_RAM.off + 0x20000);
 
 			if (h == 0) continue;
 
@@ -303,7 +304,7 @@ void video_hard_render(int drawn_fb) {
 			} else {
 				// hbias or affine world
 				u16 param_base = worlds[wrld].param;
-				s16 *params = (s16 *)(vb_state->V810_DISPLAY_RAM.off + 0x20000 + param_base * 2);
+				s16 *params = (s16 *)(rvb->V810_DISPLAY_RAM.off + 0x20000 + param_base * 2);
 
 				int full_w = 512 * scx;
 				int full_h = 512 * scy;
@@ -452,10 +453,10 @@ void video_hard_render(int drawn_fb) {
 		} else {
 			// object world
 			gpu_set_scissor(false, 0, 0, 0, 0);
-			int start_index = object_group_id == 0 ? 1023 : (vb_state->tVIPREG.SPT[object_group_id - 1]) & 1023;
-			int end_index = vb_state->tVIPREG.SPT[object_group_id] & 1023;
+			int start_index = object_group_id == 0 ? 1023 : (rvb->tVIPREG.SPT[object_group_id - 1]) & 1023;
+			int end_index = rvb->tVIPREG.SPT[object_group_id] & 1023;
 			for (int i = end_index; i != start_index; i = (i - 1) & 1023) {
-				u16 *obj_ptr = (u16 *)(vb_state->V810_DISPLAY_RAM.off + 0x0003E000 + 8 * i);
+				u16 *obj_ptr = (u16 *)(rvb->V810_DISPLAY_RAM.off + 0x0003E000 + 8 * i);
 
 				u16 cw3 = obj_ptr[3];
 				u16 tileid = cw3 & 0x07ff;
@@ -510,6 +511,6 @@ void video_hard_render(int drawn_fb) {
 	// invalidate any unused bgmaps
 	for (int i = 0; i < AFFINE_CACHE_SIZE; i++) {
 		if (!tileMapCache[i].used) tileMapCache[i].bg = -1;
-		memcpy(tileMapCache[i].GPLT, vb_state->tVIPREG.GPLT, sizeof(vb_state->tVIPREG.GPLT));
+		memcpy(tileMapCache[i].GPLT, rvb->tVIPREG.GPLT, sizeof(rvb->tVIPREG.GPLT));
 	}
 }

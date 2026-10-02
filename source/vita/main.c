@@ -14,6 +14,7 @@
 
 #include "inih/ini.h"
 #include "drc_core.h"
+#include "render_thread.h"
 #include "replay.h"
 #include "v810_cpu.h"
 #include "v810_mem.h"
@@ -574,16 +575,13 @@ static HWORD pad_to_vb(const SceCtrlData *pad) {
 }
 
 static void clear_hard_targets(void) {
+    render_thread_sync();
     for (int i = 0; i < 2; i++) {
         glBindFramebuffer(GL_FRAMEBUFFER, screenTargetHard[i]);
         glDisable(GL_SCISSOR_TEST);
         glClearColor(0, 0, 0, 0);
         glClear(GL_COLOR_BUFFER_BIT);
     }
-}
-
-static void present(void) {
-    if (gpu_take_flushed()) vglSwapBuffers(GL_FALSE);
 }
 
 static int run_game(void) {
@@ -635,10 +633,12 @@ static int run_game(void) {
                     *(uint16_t *)(vb_state->V810_DISPLAY_RAM.off + 0x3dbe6) == 0x48 &&
                     memcmp((uint8_t *)vb_state->V810_DISPLAY_RAM.off + 0x3dbec, "\0\0\x80\x01\x1f\0\0\x80\0\0", 10) == 0) {
                     if (tVBOpt.RENDERMODE != RM_CPUONLY) {
+                        render_thread_sync();
                         tVBOpt.RENDERMODE = RM_CPUONLY;
                         clearCache();
                     }
                 } else if (tVBOpt.RENDERMODE != RM_TOGPU) {
+                    render_thread_sync();
                     tVBOpt.RENDERMODE = RM_TOGPU;
                     for (int i = 0; i < 3; i++) {
                         memset((uint8_t *)vb_state->V810_DISPLAY_RAM.off + (0x8000 * i), 0, 0x6000);
@@ -660,8 +660,12 @@ static int run_game(void) {
                     }
                 }
                 if (vip_download) {
-                    tVBOpt.RENDERMODE = RM_TOCPU;
+                    if (tVBOpt.RENDERMODE != RM_TOCPU) {
+                        render_thread_sync();
+                        tVBOpt.RENDERMODE = RM_TOCPU;
+                    }
                 } else if (tVBOpt.RENDERMODE != RM_TOGPU) {
+                    render_thread_sync();
                     tVBOpt.RENDERMODE = RM_TOGPU;
                     clear_hard_targets();
                 }
@@ -669,13 +673,11 @@ static int run_game(void) {
 
             if ((vb_state->tVIPREG.DPCTRL & 0x0002) && (!on_time || !just_lagged)) {
                 video_render(displayed_fb, on_time);
-                present();
                 on_time = true;
                 display_blanked = false;
             } else if (on_time) {
                 if (tVBOpt.ANTIFLICKER) {
                     video_flush(false);
-                    present();
                 }
                 on_time = false;
             } else if (!(vb_state->tVIPREG.DPCTRL & 0x0002) && !display_blanked) {

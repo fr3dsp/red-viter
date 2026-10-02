@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "font.h"
+#include "render_thread.h"
 #include "vita_ui.h"
 
 #define ATLAS_COLS 16
@@ -54,6 +55,7 @@ void ui_init(void) {
 }
 
 void ui_begin(float r, float g, float b) {
+    render_thread_sync();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);

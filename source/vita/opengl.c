@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "render_thread.h"
 #include "video_hard.h"
 #include "vb_dsp.h"
 #include "v810_mem.h"
@@ -286,18 +287,18 @@ void gpu_init(void) {
 
 void gpu_clear_screen(int start_eye, int end_eye) {
     glDisable(GL_SCISSOR_TEST);
-    glClearColor(vb_state->tVIPREG.BKCOL == 1, vb_state->tVIPREG.BKCOL == 2, vb_state->tVIPREG.BKCOL == 3, vb_state->tVIPREG.BKCOL != 0);
+    glClearColor(rvb->tVIPREG.BKCOL == 1, rvb->tVIPREG.BKCOL == 2, rvb->tVIPREG.BKCOL == 3, rvb->tVIPREG.BKCOL != 0);
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
 void gpu_setup_drawing(void) {
     for (int i = 0; i < 4; i++) {
-        HWORD pal = vb_state->tVIPREG.GPLT[i];
+        HWORD pal = rvb->tVIPREG.GPLT[i];
         for (int j = 0; j < 3; j++) {
             pal = pal >> 2;
             palSel[i][j] = (float)(pal & 3);
         }
-        pal = vb_state->tVIPREG.JPLT[i];
+        pal = rvb->tVIPREG.JPLT[i];
         for (int j = 0; j < 3; j++) {
             pal = pal >> 2;
             palSel[i + 4][j] = (float)(pal & 3);
@@ -480,7 +481,7 @@ void gpu_draw_affine(WORLD *world, int umin, int vmin, int umax, int vmax, int d
 void update_texture_cache_hard(void) {
     int min_updated = 2048, max_updated = -1;
     for (int t = 0; t < 2048; t++) {
-        if (!tDSPCACHE.CharacterCache[t]) {
+        if (!rdsp->CharacterCache[t]) {
             if (blankTile < 0 && !tileVisible[t])
                 blankTile = t;
             continue;
@@ -489,7 +490,7 @@ void update_texture_cache_hard(void) {
         if (min_updated > t) min_updated = t;
         if (max_updated < t) max_updated = t;
 
-        u16 *tile = (u16 *)(vb_state->V810_DISPLAY_RAM.off + ((t & 0x600) << 6) + 0x6000 + (t & 0x1ff) * 16);
+        u16 *tile = (u16 *)(rvb->V810_DISPLAY_RAM.off + ((t & 0x600) << 6) + 0x6000 + (t & 0x1ff) * 16);
 
         int ty = t / 32;
         int tx = t % 32;
@@ -525,15 +526,15 @@ void update_texture_cache_hard(void) {
 }
 
 void gpu_soft_to_texture(int displayed_fb) {
-    if (tDSPCACHE.DDSPDataState[displayed_fb] == CPU_WROTE) {
-        tDSPCACHE.DDSPDataState[displayed_fb] = GPU_WROTE;
+    if (rdsp->DDSPDataState[displayed_fb] == CPU_WROTE) {
+        rdsp->DDSPDataState[displayed_fb] = GPU_WROTE;
     } else {
         return;
     }
     int start_eye = eye_count == 2 ? 0 : tVBOpt.DEFAULT_EYE;
     for (int eye = start_eye; eye < start_eye + eye_count; eye++) {
         for (int x = 0; x < 384; x++) {
-            uint32_t *in_fb_ptr = (uint32_t *)(vb_state->V810_DISPLAY_RAM.off + 0x10000 * eye + 0x8000 * displayed_fb + x * (256 / 4));
+            uint32_t *in_fb_ptr = (uint32_t *)(rvb->V810_DISPLAY_RAM.off + 0x10000 * eye + 0x8000 * displayed_fb + x * (256 / 4));
             u32 *out_fb = screenTexSoftBuffer + x * 512 + eye * 256;
 
             for (int y = 0; y < 224 / 16; y++) {
@@ -660,7 +661,7 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
     glUseProgram(sFinal);
 
     GLuint vipTex = tVBOpt.RENDERMODE != RM_TOCPU ? screenTexHard[vip_displayed_fb] : transparentPixelTexture;
-    GLuint softTex = tDSPCACHE.DDSPDataState[displayed_fb] != GPU_CLEAR ? screenTexSoft[displayed_fb] : transparentPixelTexture;
+    GLuint softTex = rdsp->DDSPDataState[displayed_fb] != GPU_CLEAR ? screenTexSoft[displayed_fb] : transparentPixelTexture;
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, vipTex);
@@ -681,9 +682,9 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
     glUniform1f(finOverLoc, tVBOpt.VIP_OVER_SOFT ? 1.0f : 0.0f);
     glUniform1f(finAlphaLoc, antiflickerBlend ? 0.5f : 1.0f);
 
-    int a = vb_state->tVIPREG.BRTA * maxRepeat;
-    int b = vb_state->tVIPREG.BRTB * maxRepeat;
-    int c = (vb_state->tVIPREG.BRTA + vb_state->tVIPREG.BRTB + vb_state->tVIPREG.BRTC) * maxRepeat;
+    int a = rvb->tVIPREG.BRTA * maxRepeat;
+    int b = rvb->tVIPREG.BRTB * maxRepeat;
+    int c = (rvb->tVIPREG.BRTA + rvb->tVIPREG.BRTB + rvb->tVIPREG.BRTC) * maxRepeat;
     set_color_uniform(finCol0Loc, 0, 0);
     set_color_uniform(finCol1Loc, 1, a);
     set_color_uniform(finCol2Loc, 2, b);

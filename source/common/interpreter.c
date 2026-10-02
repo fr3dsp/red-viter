@@ -5,346 +5,401 @@
 #include "vb_types.h"
 #include "drc_core.h"
 
-static bool get_cond(BYTE code, WORD psw) {
-    bool cond = false;
-    switch (0x40 | (code & ~8)) {
-        case V810_OP_BV: cond = psw & 4; break;
-        case V810_OP_BL: cond = psw & 8; break;
-        case V810_OP_BE: cond = psw & 1; break;
-        case V810_OP_BNH: cond = psw & 9; break;
-        case V810_OP_BN: cond = psw & 2; break;
-        case V810_OP_BR: cond = true; break;
-        case V810_OP_BLT: cond = !!(psw & 4) != !!(psw & 2); break;
-        case V810_OP_BLE: cond = (psw & 1) || !!(psw & 4) != !!(psw & 2); break;
-    }
-    if (code & 8) cond = !cond;
-    return cond;
-}
+static const uint16_t cond_lut[32] = {
+    0xf0f0, 0xff00, 0xaaaa, 0xffaa, 0xcccc, 0xffff, 0x3c3c, 0xbebe,
+    0x0f0f, 0x00ff, 0x5555, 0x0055, 0x3333, 0x0000, 0xc3c3, 0x4141,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+};
+#define COND(code, psw_val) ((cond_lut[(code) & 31] >> ((psw_val) & 15)) & 1)
+
+#define RET(code) do { S[PSW] = psw; return (code); } while (0)
+
+#define ROM_MASK (0x07000000u | (MAX_ROM_SIZE - 1))
+
+#define FETCH16(a) ({ \
+    WORD _a = (a); \
+    (_a & 0x07000000) == 0x07000000 \
+        ? *(const HWORD *)(rom_off + (_a & ROM_MASK & ~1u)) \
+        : (HWORD)mem_rhword(_a); })
+
+#define RD8(a) ({ \
+    WORD _a = (a); BYTE _v; \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: _v = *(const BYTE *)(wram_off + (_a & 0x0500ffffu)); break; \
+    case 0x07000000: _v = *(const BYTE *)(rom_off + (_a & ROM_MASK)); break; \
+    default: _v = (BYTE)mem_rbyte(_a); } \
+    _v; })
+
+#define RD16(a) ({ \
+    WORD _a = (a) & ~1u; HWORD _v; \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: _v = *(const HWORD *)(wram_off + (_a & 0x0500fffeu)); break; \
+    case 0x07000000: _v = *(const HWORD *)(rom_off + (_a & ROM_MASK & ~1u)); break; \
+    default: _v = (HWORD)mem_rhword(_a); } \
+    _v; })
+
+#define RD32(a) ({ \
+    WORD _a = (a) & ~3u; WORD _v; \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: _v = *(const WORD *)(wram_off + (_a & 0x0500fffcu)); break; \
+    case 0x07000000: _v = *(const WORD *)(rom_off + (_a & ROM_MASK & ~3u)); break; \
+    default: _v = (WORD)mem_rword(_a); } \
+    _v; })
+
+#define HW_WRITE(call) do { \
+    st->cycles = cycles; \
+    st->cycles_until_event_full = st->cycles_until_event_partial = -1; \
+    call; \
+    if (st->cycles_until_event_partial >= 0) target = cycles + st->cycles_until_event_partial; \
+    else st->cycles_until_event_full = st->cycles_until_event_partial = (int)(target - cycles); \
+} while (0)
+
+#define WR8(a, v) do { \
+    WORD _a = (a); WORD _d = (v); \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: *(BYTE *)(wram_off + (_a & 0x0500ffffu)) = _d; break; \
+    case 0x02000000: HW_WRITE(mem_wbyte(_a, _d)); break; \
+    default: mem_wbyte(_a, _d); } } while (0)
+
+#define WR16(a, v) do { \
+    WORD _a = (a) & ~1u; WORD _d = (v); \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: *(HWORD *)(wram_off + (_a & 0x0500fffeu)) = _d; break; \
+    case 0x02000000: HW_WRITE(mem_whword(_a, _d)); break; \
+    default: mem_whword(_a, _d); } } while (0)
+
+#define WR32(a, v) do { \
+    WORD _a = (a) & ~3u; WORD _d = (v); \
+    switch (_a & 0x07000000) { \
+    case 0x05000000: *(WORD *)(wram_off + (_a & 0x0500fffcu)) = _d; break; \
+    case 0x02000000: HW_WRITE(mem_wword(_a, _d)); break; \
+    default: mem_wword(_a, _d); } } while (0)
 
 int interpreter_run(void) {
-    // keep PC and cycles in local variables for extra speed
-    // can't do this with PSW because interrupts modify it
-    WORD PC = vb_state->v810_state.PC;
+    cpu_state *const st = &vb_state->v810_state;
+    WORD *const R = st->P_REG;
+    WORD *const S = st->S_REG;
+    const size_t rom_off = V810_ROM1.off;
+    const size_t wram_off = vb_state->V810_VB_RAM.off;
+
+    WORD psw = S[PSW];
+    WORD PC = st->PC;
     WORD last_PC = PC;
-    WORD cycles = vb_state->v810_state.cycles;
+    WORD cycles = st->cycles;
     BYTE last_opcode = 0;
     WORD target = cycles;
     do {
         if ((SWORD)(target - cycles) <= 0) {
-            vb_state->v810_state.PC = PC;
-            if (serviceInt(cycles, PC) && (PC != vb_state->v810_state.PC || vb_state->v810_state.ret)) {
-                // interrupt triggered, so we exit
-                // PC may have been modified so don't reset it
-                vb_state->v810_state.cycles = cycles;
+            st->PC = PC;
+            st->cycles = cycles;
+            S[PSW] = psw;
+            if (serviceInt(cycles, PC) && (PC != st->PC || st->ret)) {
+                st->cycles = cycles;
                 return 0;
             }
-            target = cycles + vb_state->v810_state.cycles_until_event_partial;
+            psw = S[PSW];
+            target = cycles + st->cycles_until_event_partial;
         }
-        HWORD instr = mem_rhword(PC);
+        HWORD instr = FETCH16(PC);
         PC += 2;
         BYTE opcode = instr >> 10;
         BYTE reg1 = instr & 31;
         BYTE reg2 = (instr >> 5) & 31;
         cycles += opcycle[opcode];
         if (opcode < 0x20) {
-            // small instr
             WORD reg1_val = 0;
-            if (!(opcode & 0x10) && reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
+            if (!(opcode & 0x10) && reg1) reg1_val = R[reg1];
             switch (opcode) {
                 case V810_OP_MOV:
-                    vb_state->v810_state.P_REG[reg2] = reg1_val;
+                    R[reg2] = reg1_val;
                     break;
                 case V810_OP_ADD: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val + reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = (SWORD)(~(reg2_val ^ reg1_val) & (reg2_val ^ res)) < 0;
                     bool cy = (unsigned)res < (unsigned)reg2_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_SUB: case V810_OP_CMP: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val - reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = (SWORD)((reg2_val ^ reg1_val) & (reg2_val ^ res)) < 0;
                     bool cy = (unsigned)reg2_val < (unsigned)reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    if (opcode == V810_OP_SUB) vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    if (opcode == V810_OP_SUB) R[reg2] = res;
                     break;
                 }
                 case V810_OP_SHL: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     reg1_val &= 31;
                     WORD res = reg2_val << reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1_val != 0 ? (reg2_val >> (32 - reg1_val)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_SHR: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     reg1_val &= 31;
                     WORD res = reg2_val >> reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1_val != 0 ? (reg2_val >> (reg1_val - 1)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_JMP:
                     PC = reg1_val;
                     break;
                 case V810_OP_SAR: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     reg1_val &= 31;
                     WORD res = (SWORD)reg2_val >> reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1_val != 0 ? (reg2_val >> (reg1_val - 1)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_MUL: {
-                    SWORD reg2_val = reg2 ? (SWORD)vb_state->v810_state.P_REG[reg2] : 0;
+                    SWORD reg2_val = reg2 ? (SWORD)R[reg2] : 0;
                     int64_t res = (int64_t)(SWORD)reg1_val * (int64_t)reg2_val;
                     bool ov = res != (int64_t)(int32_t)res;
                     bool z = res == 0;
                     bool s = res < 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2);
-                    vb_state->v810_state.P_REG[30] = (WORD)(res >> 32);
-                    vb_state->v810_state.P_REG[reg2] = (WORD)res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2);
+                    R[30] = (WORD)(res >> 32);
+                    R[reg2] = (WORD)res;
                     break;
                 }
                 case V810_OP_DIV: {
-                    SWORD reg2_val = reg2 ? (SWORD)vb_state->v810_state.P_REG[reg2] : 0;
+                    SWORD reg2_val = reg2 ? (SWORD)R[reg2] : 0;
                     if (reg2_val == 0x80000000 && (SWORD)reg1_val == -1) {
-                        vb_state->v810_state.P_REG[30] = 0;
-                        vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | 6;
+                        R[30] = 0;
+                        psw = (psw & ~0x7) | 6;
                     } else {
-                        vb_state->v810_state.P_REG[30] = reg2_val % (SWORD)reg1_val;
+                        R[30] = reg2_val % (SWORD)reg1_val;
                         SWORD res = reg2_val / (SWORD)reg1_val;
                         bool z = res == 0;
                         bool s = res < 0;
-                        vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | z | (s << 1);
-                        vb_state->v810_state.P_REG[reg2] = res;
+                        psw = (psw & ~0x7) | z | (s << 1);
+                        R[reg2] = res;
                     }
                     break;
                 }
                 case V810_OP_MULU: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     uint64_t res = (uint64_t)reg1_val * (uint64_t)reg2_val;
                     bool ov = res != (uint64_t)(uint32_t)res;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2);
-                    vb_state->v810_state.P_REG[30] = (WORD)(res >> 32);
-                    vb_state->v810_state.P_REG[reg2] = (WORD)res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2);
+                    R[30] = (WORD)(res >> 32);
+                    R[reg2] = (WORD)res;
                     break;
                 }
                 case V810_OP_DIVU: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
-                    vb_state->v810_state.P_REG[30] = reg2_val % reg1_val;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
+                    R[30] = reg2_val % reg1_val;
                     WORD res = reg2_val / reg1_val;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | z | (s << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0x7) | z | (s << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_OR: {
-                    WORD res = (reg2 ? vb_state->v810_state.P_REG[reg2] : 0) | reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    WORD res = (reg2 ? R[reg2] : 0) | reg1_val;
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_AND: {
-                    WORD res = (reg2 ? vb_state->v810_state.P_REG[reg2] : 0) & reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    WORD res = (reg2 ? R[reg2] : 0) & reg1_val;
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_XOR: {
-                    WORD res = (reg2 ? vb_state->v810_state.P_REG[reg2] : 0) ^ reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    WORD res = (reg2 ? R[reg2] : 0) ^ reg1_val;
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_NOT: {
                     WORD res = ~reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_MOV_I: {
                     WORD imm = reg1 & 0x10 ? reg1 | 0xfffffff0 : reg1;
-                    vb_state->v810_state.P_REG[reg2] = imm;
+                    R[reg2] = imm;
                     break;
                 }
                 case V810_OP_ADD_I: {
                     WORD imm = reg1 & 0x10 ? reg1 | 0xfffffff0 : reg1;
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val + imm;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = (SWORD)(~(reg2_val ^ imm) & (reg2_val ^ res)) < 0;
                     bool cy = (unsigned)res < (unsigned)reg2_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_SETF: {
-                    vb_state->v810_state.P_REG[reg2] = get_cond(reg1, vb_state->v810_state.S_REG[PSW]);
+                    R[reg2] = COND(reg1, psw);
                     break;
                 }
                 case V810_OP_CMP_I: {
                     WORD imm = reg1 & 0x10 ? reg1 | 0xfffffff0 : reg1;
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val - imm;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = (SWORD)((reg2_val ^ imm) & (reg2_val ^ res)) < 0;
                     bool cy = (unsigned)reg2_val < (unsigned)imm;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    if (opcode == V810_OP_SUB) vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    if (opcode == V810_OP_SUB) R[reg2] = res;
                     break;
                 }
                 case V810_OP_SHL_I: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val << reg1;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1 != 0 ? (reg2_val >> (32 - reg1)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_SHR_I: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = reg2_val >> reg1;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1 != 0 ? (reg2_val >> (reg1 - 1)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_CLI:
-                    vb_state->v810_state.S_REG[PSW] &= ~(1 << 12);
+                    psw &= ~(1 << 12);
                     break;
                 case V810_OP_SAR_I: {
-                    WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                    WORD reg2_val = reg2 ? R[reg2] : 0;
                     WORD res = (SWORD)reg2_val >> reg1;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = false;
                     bool cy = reg1 != 0 ? (reg2_val >> (reg1 - 1)) & 1 : 0;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
-                // case V810_OP_TRAP:
                 case V810_OP_RETI:
-                    if (vb_state->v810_state.S_REG[PSW] & PSW_NP) {
-                        PC = vb_state->v810_state.S_REG[FEPC];
-                        vb_state->v810_state.S_REG[PSW] = vb_state->v810_state.S_REG[FEPSW];
+                    if (psw & PSW_NP) {
+                        PC = S[FEPC];
+                        psw = S[FEPSW];
                     } else {
-                        PC = vb_state->v810_state.S_REG[EIPC];
-                        vb_state->v810_state.S_REG[PSW] = vb_state->v810_state.S_REG[EIPSW];
+                        PC = S[EIPC];
+                        psw = S[EIPSW];
                     }
                     break;
                 case V810_OP_HALT: {
                     cycles = target;
-                    vb_state->v810_state.PC = PC;
+                    st->PC = PC;
+                    S[PSW] = psw;
                     do {
-                        cycles += vb_state->v810_state.cycles_until_event_partial;
-                        vb_state->v810_state.cycles_until_event_partial = vb_state->v810_state.cycles_until_event_full = 0;
-                        vb_state->v810_state.cycles = cycles;
+                        cycles += st->cycles_until_event_partial;
+                        st->cycles_until_event_partial = st->cycles_until_event_full = 0;
+                        st->cycles = cycles;
                         serviceInt(cycles, PC);
-                    } while (!vb_state->v810_state.ret && vb_state->v810_state.PC == PC);
-                    if (vb_state->v810_state.PC == PC) {
-                        // no interrupt triggered, so repeat the halt
-                        vb_state->v810_state.PC = last_PC;
+                    } while (!st->ret && st->PC == PC);
+                    if (st->PC == PC) {
+                        st->PC = last_PC;
                     }
-                    // PC was modified so don't reset it
                     return 0;
                 }
                 case V810_OP_LDSR:
-                    vb_state->v810_state.S_REG[reg1] = (reg2 ? vb_state->v810_state.P_REG[reg2] : 0);
+                    S[reg1] = (reg2 ? R[reg2] : 0);
+                    if (reg1 == PSW) psw = S[PSW];
                     break;
                 case V810_OP_STSR:
-                    vb_state->v810_state.P_REG[reg2] = vb_state->v810_state.S_REG[reg1];
+                    R[reg2] = reg1 == PSW ? psw : S[reg1];
                     break;
                 case V810_OP_SEI:
-                    vb_state->v810_state.S_REG[PSW] |= 1 << 12;
+                    psw |= 1 << 12;
                     break;
                 case V810_OP_BSTR: {
                     typedef bool (*bstr_func)(WORD,WORD,WORD,WORD);
                     bstr_func func = (bstr_func)bssuboptable[reg1].func;
-                    WORD lastarg = reg1 < 4 ? vb_state->v810_state.P_REG[27] & 31 : ((vb_state->v810_state.P_REG[27] & 31)) | ((vb_state->v810_state.P_REG[26] & 31) << 5) | ((target - cycles) << 10);
-                    WORD res = func(vb_state->v810_state.P_REG[30], vb_state->v810_state.P_REG[29], vb_state->v810_state.P_REG[28], lastarg);
+                    WORD lastarg = reg1 < 4 ? R[27] & 31 : ((R[27] & 31)) | ((R[26] & 31) << 5) | ((target - cycles) << 10);
+                    WORD res = func(R[30], R[29], R[28], lastarg);
                     if (reg1 < 4) {
-                        vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~1) | !res;
+                        psw = (psw & ~1) | !res;
                     } else {
-                        vb_state->v810_state.cycles += res;
-                        if (vb_state->v810_state.P_REG[28]) {
+                        cycles += res;
+                        if (R[28]) {
                             PC = last_PC;
                         }
                     }
                     break;
                 }
                 default: {
-                    vb_state->v810_state.PC = last_PC;
-                    return DRC_ERR_BAD_INST;
+                    st->PC = last_PC;
+                    RET(DRC_ERR_BAD_INST);
                 }
             }
         } else if (opcode < 0x28) {
-            // branch
-            if (get_cond(instr >> 9, vb_state->v810_state.S_REG[PSW])) {
+            if (COND(instr >> 9, psw)) {
                 SHWORD disp = instr & (1 << 8) ? (instr | 0xfe00) : (instr & ~0xfe00);
                 PC += disp - 2;
             } else {
-                // branch not taken, so it only took 1 cycle
                 cycles -= 2;
             }
         } else {
-            // long instr
-            HWORD instr2 = mem_rhword(PC);
+            HWORD instr2 = FETCH16(PC);
             PC += 2;
             switch (opcode) {
                 case V810_OP_MOVEA: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = reg1_val + (SHWORD)instr2;
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = reg1_val + (SHWORD)instr2;
                     break;
                 }
                 case V810_OP_ADDI: {
-                    WORD reg1_val = reg1 ? vb_state->v810_state.P_REG[reg1] : 0;
+                    WORD reg1_val = reg1 ? R[reg1] : 0;
                     WORD imm = (SHWORD)instr2;
                     WORD res = reg1_val + imm;
                     bool z = res == 0;
                     bool s = (SWORD)res < 0;
                     bool ov = (SWORD)(~(reg1_val ^ imm) & (reg1_val ^ res)) < 0;
                     bool cy = (unsigned)res < (unsigned)reg1_val;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    psw = (psw & ~0xf) | z | (s << 1) | (ov << 2) | (cy << 3);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_JAL:
-                    vb_state->v810_state.P_REG[31] = PC;
-                    // fallthrough
+                    R[31] = PC;
                 case V810_OP_JR: {
                     SWORD disp = instr2 | ((SWORD)instr << 16);
                     if (disp & 0x02000000) disp |= 0xfc000000;
@@ -354,179 +409,156 @@ int interpreter_run(void) {
                 }
                 case V810_OP_ORI: {
                     WORD res = instr2;
-                    if (reg1) res |= vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    if (reg1) res |= R[reg1];
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_ANDI: {
                     WORD res = 0;
-                    if (reg1) res = vb_state->v810_state.P_REG[reg1] & instr2;
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    if (reg1) res = R[reg1] & instr2;
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_XORI: {
                     WORD res = instr2;
-                    if (reg1) res ^= vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
-                    vb_state->v810_state.P_REG[reg2] = res;
+                    if (reg1) res ^= R[reg1];
+                    psw = (psw & ~0x7) | (res == 0) | (((SWORD)res < 0) << 1);
+                    R[reg2] = res;
                     break;
                 }
                 case V810_OP_MOVHI: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = reg1_val + ((WORD)instr2 << 16);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = reg1_val + ((WORD)instr2 << 16);
                     break;
                 }
                 case V810_OP_LD_B: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = (SBYTE)mem_rbyte(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = (SBYTE)RD8(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 2 cycles instead of 3
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 2;
                     }
                     break;
                 }
                 case V810_OP_LD_H: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = (SHWORD)mem_rhword(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = (SHWORD)RD16(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 2 cycles instead of 3
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 2;
                     }
                     break;
                 }
                 case V810_OP_LD_W: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = mem_rword(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = RD32(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 4 cycles instead of 5
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 4;
                     }
                     break;
                 }
                 case V810_OP_IN_B: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = (BYTE)mem_rbyte(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = RD8(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 2 cycles instead of 3
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 2;
                     }
                     break;
                 }
                 case V810_OP_IN_H: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = (HWORD)mem_rhword(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = RD16(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 2 cycles instead of 3
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 2;
                     }
                     break;
                 }
                 case V810_OP_IN_W: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
-                    vb_state->v810_state.P_REG[reg2] = (WORD)mem_rword(reg1_val + (SHWORD)instr2);
+                    if (reg1) reg1_val = R[reg1];
+                    R[reg2] = RD32(reg1_val + (SHWORD)instr2);
                     if ((last_opcode & 0x34) == 0x30 && (last_opcode & 3) != 2) {
-                    // load immediately following another load takes 4 cycles instead of 5
                         cycles -= 1;
                     } else if (opcycle[last_opcode] > 4) {
-                        // load following instruction taking "many" cycles only takes 1 cycles
-                        // guessing "many" is 4 for now
                         cycles -= 4;
                     }
                     break;
                 }
                 case V810_OP_ST_B: case V810_OP_OUT_B: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
+                    if (reg1) reg1_val = R[reg1];
                     BYTE reg2_val = 0;
-                    if (reg2) reg2_val = vb_state->v810_state.P_REG[reg2];
-                    mem_wbyte(reg1_val + (SHWORD)instr2, reg2_val);
+                    if (reg2) reg2_val = R[reg2];
+                    WR8(reg1_val + (SHWORD)instr2, reg2_val);
                     if ((last_opcode & 0x34) == 0x34 && (last_opcode & 3) != 2) {
-                        // with two consecutive stores, the second takes 2 cycles instead of 1
                         cycles += 1;
                     }
                     break;
                 }
                 case V810_OP_ST_H: case V810_OP_OUT_H: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
+                    if (reg1) reg1_val = R[reg1];
                     HWORD reg2_val = 0;
-                    if (reg2) reg2_val = vb_state->v810_state.P_REG[reg2];
-                    mem_whword(reg1_val + (SHWORD)instr2, reg2_val);
+                    if (reg2) reg2_val = R[reg2];
+                    WR16(reg1_val + (SHWORD)instr2, reg2_val);
                     if ((last_opcode & 0x34) == 0x34 && (last_opcode & 3) != 2) {
-                        // with two consecutive stores, the second takes 2 cycles instead of 1
                         cycles += 1;
                     }
                     break;
                 }
                 case V810_OP_ST_W: case V810_OP_OUT_W: {
                     WORD reg1_val = 0;
-                    if (reg1) reg1_val = vb_state->v810_state.P_REG[reg1];
+                    if (reg1) reg1_val = R[reg1];
                     WORD reg2_val = 0;
-                    if (reg2) reg2_val = vb_state->v810_state.P_REG[reg2];
-                    mem_wword(reg1_val + (SHWORD)instr2, reg2_val);
+                    if (reg2) reg2_val = R[reg2];
+                    WR32(reg1_val + (SHWORD)instr2, reg2_val);
                     if ((last_opcode & 0x34) == 0x34 && (last_opcode & 3) != 2) {
-                        // with two consecutive stores, the second takes 4 cycles instead of 1
                         cycles += 3;
                     }
                     break;
                 }
-                // case V810_OP_CAXI:
                 case V810_OP_FPP: {
                     int subop = instr2 >> 10;
                     #pragma GCC diagnostic push
                     #pragma GCC diagnostic ignored "-Wstrict-aliasing"
                     if (subop == V810_OP_CVT_WS) {
-                        float res = reg1 ? (float)(SWORD)vb_state->v810_state.P_REG[reg1] : 0;
+                        float res = reg1 ? (float)(SWORD)R[reg1] : 0;
                         bool z = res == 0;
                         int scy = res < 0 ? 0xa : 0;
-                        vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | scy;
-                        *(float*)&vb_state->v810_state.P_REG[reg2] = res;
+                        psw = (psw & ~0xf) | z | scy;
+                        *(float*)&R[reg2] = res;
                     } else if (!(subop & 8) || subop == V810_OP_TRNC_SW) {
-                        // float
-                        float reg1_val = reg1 ? *(float*)&vb_state->v810_state.P_REG[reg1] : 0;
+                        float reg1_val = reg1 ? *(float*)&R[reg1] : 0;
                         if (subop == V810_OP_CVT_SW) {
                             SWORD res = round(reg1_val);
                             bool z = res == 0;
                             int scy = res < 0 ? 2 : 0;
-                            vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | scy;
-                            vb_state->v810_state.P_REG[reg2] = res;
+                            psw = (psw & ~0xf) | z | scy;
+                            R[reg2] = res;
                         } else if (subop == V810_OP_TRNC_SW) {
                             SWORD res = (SWORD)(reg1_val);
                             bool z = res == 0;
                             int scy = res < 0 ? 2 : 0;
-                            vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | scy;
-                            vb_state->v810_state.P_REG[reg2] = res;
+                            psw = (psw & ~0xf) | z | scy;
+                            R[reg2] = res;
                         } else {
-                            float reg2_val = reg2 ? *(float*)&vb_state->v810_state.P_REG[reg2] : 0;
+                            float reg2_val = reg2 ? *(float*)&R[reg2] : 0;
                             float res;
                             switch (subop) {
                                 case V810_OP_ADDF_S:
@@ -543,50 +575,50 @@ int interpreter_run(void) {
                                     res = reg2_val / reg1_val;
                                     break;
                                 default:
-                                    return DRC_ERR_BAD_INST;
+                                    RET(DRC_ERR_BAD_INST);
                             }
                             bool z = res == 0;
                             int scy = res < 0 ? 0xa : 0;
-                            vb_state->v810_state.S_REG[PSW] = (vb_state->v810_state.S_REG[PSW] & ~0xf) | z | scy;
-                            if (subop != V810_OP_CMPF_S) *(float*)&vb_state->v810_state.P_REG[reg2] = res;
+                            psw = (psw & ~0xf) | z | scy;
+                            if (subop != V810_OP_CMPF_S) *(float*)&R[reg2] = res;
                         }
                     } else {
-                        // extended
-                        WORD reg2_val = reg2 ? vb_state->v810_state.P_REG[reg2] : 0;
+                        WORD reg2_val = reg2 ? R[reg2] : 0;
                         switch (subop) {
                             case V810_OP_MPYHW:
-                                vb_state->v810_state.P_REG[reg2] *= reg1 ? (int)(vb_state->v810_state.P_REG[reg1] << 15) >> 15 : 0;
+                                R[reg2] *= reg1 ? (int)(R[reg1] << 15) >> 15 : 0;
                                 break;
                             case V810_OP_REV:
-                                vb_state->v810_state.P_REG[reg2] = reg1 ? ins_rev(vb_state->v810_state.P_REG[reg1]) : 0;
+                                R[reg2] = reg1 ? ins_rev(R[reg1]) : 0;
                                 break;
                             case V810_OP_XB:
-                                vb_state->v810_state.P_REG[reg2] = (reg2_val & 0xFFFF0000) | ((reg2_val << 8) & 0xFF00) | ((reg2_val >> 8) & 0xFF);
+                                R[reg2] = (reg2_val & 0xFFFF0000) | ((reg2_val << 8) & 0xFF00) | ((reg2_val >> 8) & 0xFF);
                                 break;
                             case V810_OP_XH:
-                                vb_state->v810_state.P_REG[reg2] = (reg2_val << 16) | (reg2_val >> 16);
+                                R[reg2] = (reg2_val << 16) | (reg2_val >> 16);
                                 break;
                             default:
-                                return DRC_ERR_BAD_INST;
+                                RET(DRC_ERR_BAD_INST);
                         }
                     }
                     #pragma GCC diagnostic pop
                     break;
                 }
                 default: {
-                    vb_state->v810_state.PC = last_PC;
-                    return DRC_ERR_BAD_INST;
+                    st->PC = last_PC;
+                    RET(DRC_ERR_BAD_INST);
                 }
             }
         }
         last_opcode = opcode;
         if ((PC & 0x07000000) < 0x05000000) {
-            vb_state->v810_state.PC = last_PC;
-            return DRC_ERR_BAD_PC;
+            st->PC = last_PC;
+            RET(DRC_ERR_BAD_PC);
         }
         last_PC = PC;
-    } while (!vb_state->v810_state.ret && (!DRC_AVAILABLE || (PC & 0x07000000) != 0x07000000));
-    vb_state->v810_state.PC = PC;
-    vb_state->v810_state.cycles = cycles;
+    } while (!DRC_AVAILABLE || (PC & 0x07000000) != 0x07000000);
+    S[PSW] = psw;
+    st->PC = PC;
+    st->cycles = cycles;
     return 0;
 }
