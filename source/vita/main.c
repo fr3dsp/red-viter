@@ -39,6 +39,11 @@ void drc_relocTable(void) {}
 #define CFG_PATH "ux0:data/red-viter/vita.cfg"
 #define BTN_L (SCE_CTRL_LTRIGGER | SCE_CTRL_L1)
 #define BTN_R (SCE_CTRL_RTRIGGER | SCE_CTRL_R1)
+#define BROWSER_ROWS 16
+#define BROWSER_ROW_H 24
+#define MENU_PX 130
+#define MENU_PW 700
+#define MENU_ROW_H 26
 
 enum {
     ACT_RESUME,
@@ -203,14 +208,45 @@ static bool dir_exists(const char *path) {
     return true;
 }
 
+static void fit_text(char *out, size_t size, const char *in, int max_chars) {
+    if ((int)strlen(in) <= max_chars) snprintf(out, size, "%s", in);
+    else snprintf(out, size, "...%s", in + strlen(in) - (max_chars - 3));
+}
+
+static void fit_name(char *out, size_t size, const char *in, int max_chars) {
+    if ((int)strlen(in) <= max_chars) snprintf(out, size, "%s", in);
+    else snprintf(out, size, "%.*s...", max_chars - 3, in);
+}
+
+static const char *base_name(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static void draw_icon(float x, float y, bool dir) {
+    if (dir) {
+        ui_rect(x, y + 3, 9, 3, COL_FOLDER);
+        ui_rect(x, y + 6, 20, 12, COL_FOLDER);
+        ui_rect(x, y + 8, 20, 1, 0xFFD890FFu);
+    } else {
+        ui_rect(x + 3, y + 1, 13, 18, COL_WHITE);
+        ui_rect(x + 10, y + 1, 6, 6, 0xB8B8B8FFu);
+        ui_rect(x + 5, y + 10, 9, 2, COL_RED);
+        ui_rect(x + 5, y + 14, 9, 2, COL_RED);
+    }
+}
+
 static void message_screen(const char *title, const char *line) {
     SceCtrlData pad;
     wait_release();
     for (;;) {
-        ui_begin(0.05f, 0.0f, 0.0f);
-        ui_text(40, 40, 2, COL_RED, "%s", title);
-        ui_text(40, 120, 2, COL_WHITE, "%s", line);
-        ui_text(40, 480, 2, COL_GREY, "Press Cross to continue");
+        ui_begin(0.02f, 0.0f, 0.0f);
+        ui_backdrop();
+        ui_header(title, "");
+        ui_panel(130, 130, SCREEN_W - 260, 200);
+        ui_text(162, 164, 2, COL_WHITE, "%s", line);
+        ui_footer();
+        ui_hint(16, SCREEN_H - 30, "X", "Continue");
         ui_end();
         read_pad(&pad);
         if (pad_pressed(&pad, false) & (SCE_CTRL_CROSS | SCE_CTRL_CIRCLE)) break;
@@ -254,33 +290,56 @@ static bool browse_rom(char *out_path, size_t out_size) {
             reload = false;
         }
 
-        const int rows = 22;
+        const int rows = BROWSER_ROWS;
         bool has_up = !at_root(cwd);
         int total = count + (has_up ? 1 : 0);
+        const float list_y = 84;
+        const float list_h = SCREEN_H - 40 - 8 - list_y;
+        const float rows_y = list_y + (list_h - rows * BROWSER_ROW_H) / 2;
 
-        ui_begin(0.04f, 0.0f, 0.0f);
-        ui_rect(0, 0, SCREEN_W, 56, COL_BAR);
-        ui_text(16, 8, 2, COL_WHITE, "Red Viter");
-        ui_text(16, 36, 1, COL_GREY, "%s", cwd);
+        char path_text[120];
+        fit_text(path_text, sizeof(path_text), cwd, 100);
+
+        ui_begin(0.02f, 0.0f, 0.0f);
+        ui_backdrop();
+        ui_header("Red Viter", path_text);
+        ui_text_right(SCREEN_W - 24, 24, 1, COL_GREY, "%d %s", count, count == 1 ? "item" : "items");
+        ui_panel(12, list_y, SCREEN_W - 24, list_h);
         for (int i = 0; i < rows && top + i < total; i++) {
             int idx = top + i;
-            float y = 68 + i * 20;
-            if (idx == sel) ui_rect(8, y - 2, SCREEN_W - 16, 20, COL_SEL);
+            float y = rows_y + i * BROWSER_ROW_H;
             const char *name;
             bool is_dir;
             if (has_up && idx == 0) {
-                name = "..";
+                name = "Parent folder";
                 is_dir = true;
             } else {
                 const Entry *e = &entries[idx - (has_up ? 1 : 0)];
                 name = e->name;
                 is_dir = e->dir;
             }
-            ui_text(20, y, 1, is_dir ? COL_GREY : COL_WHITE, "%s%s", is_dir ? "[DIR] " : "      ", name);
+            bool selected = idx == sel;
+            if (selected) {
+                ui_rect_grad(20, y, SCREEN_W - 56, BROWSER_ROW_H, COL_SEL_TOP, COL_SEL_BOT);
+                ui_rect(20, y, 4, BROWSER_ROW_H, COL_ACCENT);
+            }
+            draw_icon(36, y + 2, is_dir);
+            char shown[256];
+            fit_name(shown, sizeof(shown), name, 88);
+            ui_text(70, y + 4, 1, selected ? COL_WHITE : (is_dir ? COL_GREY : COL_WHITE), "%s", shown);
         }
-        if (total == 0) ui_text(20, 80, 2, COL_GREY, "No .vb or .zip files here");
-        ui_rect(0, SCREEN_H - 36, SCREEN_W, 36, COL_BAR);
-        ui_text(16, SCREEN_H - 28, 1, COL_WHITE, "Up/Down: select   Cross: open   Circle: parent folder   Start: quit");
+        ui_scrollbar(SCREEN_W - 28, rows_y, rows * BROWSER_ROW_H, top, rows, total);
+        if (total == 0) {
+            ui_text_center(SCREEN_W / 2, 220, 2, COL_GREY, "No .vb or .zip files here");
+            ui_text_center(SCREEN_W / 2, 270, 1, COL_MUTED, "Copy your ROMs to ux0:/vb/");
+        }
+        ui_footer();
+        float hx = 16;
+        hx = ui_hint(hx, SCREEN_H - 30, "^v", "Select");
+        hx = ui_hint(hx, SCREEN_H - 30, "< >", "Page");
+        hx = ui_hint(hx, SCREEN_H - 30, "X", "Open");
+        hx = ui_hint(hx, SCREEN_H - 30, "O", "Back");
+        ui_hint(hx, SCREEN_H - 30, "START", "Quit");
         ui_end();
 
         read_pad(&pad);
@@ -359,11 +418,14 @@ static bool load_rom(const char *path) {
     for (;;) {
         ret = v810_load_step();
         if (ret < 0 || ret == 100) break;
-        ui_begin(0.04f, 0.0f, 0.0f);
-        ui_text(40, 40, 2, COL_WHITE, "%s", name);
-        ui_text(40, 200, 2, COL_WHITE, "Loading...");
-        ui_rect(160, 300, 640, 24, COL_SEL);
-        ui_rect(160, 300, 6.4f * ret, 24, COL_RED);
+        char shown[128];
+        fit_name(shown, sizeof(shown), name, 100);
+        ui_begin(0.02f, 0.0f, 0.0f);
+        ui_backdrop();
+        ui_header("Loading", shown);
+        ui_text_center(SCREEN_W / 2, 220, 2, COL_WHITE, "Loading...");
+        ui_progress(160, 280, 640, 28, ret / 100.0f);
+        ui_text_center(SCREEN_W / 2, 322, 1, COL_GREY, "%d%%", ret < 0 ? 0 : ret);
         ui_end();
     }
 
@@ -412,6 +474,21 @@ enum {
     MI_COUNT
 };
 
+static const char *menuLabels[MI_COUNT] = {
+    "Resume",
+    "Reset game",
+    "Save state",
+    "Load state",
+    "State slot",
+    "Screen size",
+    "Scaling filter",
+    "Colors",
+    "Anti-flicker",
+    "Save settings",
+    "Close game",
+    "Quit Red Viter",
+};
+
 static int pause_menu(bool *reset_requested) {
     SceCtrlData pad;
     int sel = 0;
@@ -423,31 +500,70 @@ static int pause_menu(bool *reset_requested) {
     wait_release();
 
     for (;;) {
-        char items[MI_COUNT][96];
-        snprintf(items[MI_RESUME], sizeof(items[0]), "Resume");
-        snprintf(items[MI_RESET], sizeof(items[0]), "Reset game");
-        snprintf(items[MI_SAVESTATE], sizeof(items[0]), "Save state");
-        snprintf(items[MI_LOADSTATE], sizeof(items[0]), "Load state%s", emulation_hasstate(stateSlot) ? "" : " (slot empty)");
-        snprintf(items[MI_SLOT], sizeof(items[0]), "State slot: < %d >", stateSlot);
-        snprintf(items[MI_SCALE], sizeof(items[0]), "Screen size: < %s >", scaleNames[viewScale]);
-        snprintf(items[MI_FILTER], sizeof(items[0]), "Scaling filter: < %s >", viewSmooth ? "Smooth" : "Sharp");
-        snprintf(items[MI_TINT], sizeof(items[0]), "Colors: < %s >", tintPresets[current_tint_index()].name);
-        snprintf(items[MI_ANTIFLICKER], sizeof(items[0]), "Anti-flicker: < %s >", tVBOpt.ANTIFLICKER ? "On" : "Off");
-        snprintf(items[MI_SAVECFG], sizeof(items[0]), "Save settings");
-        snprintf(items[MI_BROWSER], sizeof(items[0]), "Close game");
-        snprintf(items[MI_QUIT], sizeof(items[0]), "Quit Red Viter");
-
-        ui_begin(0.04f, 0.0f, 0.0f);
-        ui_rect(0, 0, SCREEN_W, 56, COL_BAR);
-        ui_text(16, 14, 2, COL_WHITE, "Paused");
-        for (int i = 0; i < MI_COUNT; i++) {
-            float y = 76 + i * 30;
-            if (i == sel) ui_rect(8, y - 4, SCREEN_W - 16, 28, COL_SEL);
-            ui_text(24, y, 2, COL_WHITE, "%s", items[i]);
+        char values[MI_COUNT][64];
+        for (int i = 0; i < MI_COUNT; i++) values[i][0] = 0;
+        bool adjustable[MI_COUNT] = {false};
+        bool muted[MI_COUNT] = {false};
+        snprintf(values[MI_SLOT], sizeof(values[0]), "%d", stateSlot);
+        snprintf(values[MI_SCALE], sizeof(values[0]), "%s", scaleNames[viewScale]);
+        snprintf(values[MI_FILTER], sizeof(values[0]), "%s", viewSmooth ? "Smooth" : "Sharp");
+        snprintf(values[MI_TINT], sizeof(values[0]), "%s", tintPresets[current_tint_index()].name);
+        snprintf(values[MI_ANTIFLICKER], sizeof(values[0]), "%s", tVBOpt.ANTIFLICKER ? "On" : "Off");
+        if (!emulation_hasstate(stateSlot)) {
+            snprintf(values[MI_LOADSTATE], sizeof(values[0]), "empty");
+            muted[MI_LOADSTATE] = true;
         }
-        if (status[0]) ui_text(24, 76 + MI_COUNT * 30 + 10, 2, COL_GREY, "%s", status);
-        ui_rect(0, SCREEN_H - 36, SCREEN_W, 36, COL_BAR);
-        ui_text(16, SCREEN_H - 28, 1, COL_WHITE, "Up/Down: select   Left/Right: change   Cross: confirm   Circle: resume");
+        adjustable[MI_SLOT] = adjustable[MI_SCALE] = adjustable[MI_FILTER] = adjustable[MI_TINT] = adjustable[MI_ANTIFLICKER] = true;
+
+        char game[128];
+        fit_name(game, sizeof(game), base_name(tVBOpt.ROM_PATH), 100);
+
+        ui_begin(0.02f, 0.0f, 0.0f);
+        ui_backdrop();
+        ui_header("Paused", game);
+        if (status[0]) ui_text_right(SCREEN_W - 24, 24, 1, COL_VALUE, "%s", status);
+        ui_panel(MENU_PX, 84, MENU_PW, 408);
+
+        float y = 94;
+        for (int i = 0; i < MI_COUNT; i++) {
+            const char *group = i == MI_RESUME ? "GAME" : i == MI_SCALE ? "DISPLAY" : i == MI_SAVECFG ? "SYSTEM" : NULL;
+            if (group) {
+                if (i != MI_RESUME) y += 6;
+                int gw = ui_text_width(1, group);
+                ui_text(MENU_PX + 24, y, 1, COL_MUTED, "%s", group);
+                ui_rect(MENU_PX + 24 + gw + 12, y + 8, MENU_PW - 48 - gw - 12, 1, COL_LINE);
+                y += 22;
+            }
+            bool selected = i == sel;
+            if (selected) {
+                ui_rect_grad(MENU_PX + 10, y, MENU_PW - 20, MENU_ROW_H, COL_SEL_TOP, COL_SEL_BOT);
+                ui_rect(MENU_PX + 10, y, 4, MENU_ROW_H, COL_ACCENT);
+            }
+            ui_text(MENU_PX + 30, y + 5, 1, COL_WHITE, "%s", menuLabels[i]);
+            if (values[i][0]) {
+                char shown[80];
+                if (selected && adjustable[i]) snprintf(shown, sizeof(shown), "< %s >", values[i]);
+                else snprintf(shown, sizeof(shown), "%s", values[i]);
+                unsigned int vc = selected ? COL_WHITE : (muted[i] ? COL_MUTED : COL_VALUE);
+                float right = MENU_PX + MENU_PW - 30;
+                ui_text_right(right, y + 5, 1, vc, "%s", shown);
+                if (i == MI_TINT && !tintPresets[current_tint_index()].multicol) {
+                    int t = tintPresets[current_tint_index()].tint;
+                    unsigned int sw = ((unsigned int)(t & 0xff) << 24) | ((unsigned int)((t >> 8) & 0xff) << 16) | ((unsigned int)((t >> 16) & 0xff) << 8) | 0xFFu;
+                    float sx = right - ui_text_width(1, shown) - 26;
+                    ui_round_rect(sx, y + 5, 16, 16, COL_WHITE);
+                    ui_round_rect(sx + 1, y + 6, 14, 14, sw);
+                }
+            }
+            y += MENU_ROW_H;
+        }
+
+        ui_footer();
+        float hx = 16;
+        hx = ui_hint(hx, SCREEN_H - 30, "^v", "Select");
+        hx = ui_hint(hx, SCREEN_H - 30, "< >", "Change");
+        hx = ui_hint(hx, SCREEN_H - 30, "X", "Confirm");
+        ui_hint(hx, SCREEN_H - 30, "O", "Resume");
         ui_end();
 
         read_pad(&pad);
