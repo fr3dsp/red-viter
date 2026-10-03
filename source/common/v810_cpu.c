@@ -735,7 +735,7 @@ int v810_run(void) {
     while (true) {
         int ret = 0;
         #if DRC_AVAILABLE
-        if (likely((vb_state->v810_state.PC & 0x07000000) == 0x07000000)) {
+        if (likely(drc_ready && (vb_state->v810_state.PC & 0x07000000) == 0x07000000)) {
             ret = drc_run();
         } else
         #endif

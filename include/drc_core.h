@@ -2,26 +2,17 @@
 #define DRC_CORE_H
 
 #include "vb_types.h"
-#include "arm_emit.h"
 #include "v810_mem.h"
 
-#if __ARM_ARCH >= 6 && __arm__ && !defined(__vita__)
+#if (defined(__arm__) && __ARM_ARCH >= 7) || defined(DRC_HOST_SIM)
 #define DRC_AVAILABLE true
 #else
 #define DRC_AVAILABLE false
 #endif
 
-#define BLOCK_MAP_COUNT (MAX_ROM_SIZE / 2 / 2)
-#define CACHE_SIZE  0x200000
-#define MAX_V810_INST 8192
-#define MAX_ARM_INST  32768
-#define ARM_CACHE_REG_START 4
-#define ARM_NUM_CACHE_REGS 6
-#define MAX_NUM_BLOCKS 4096
-
-#if MAX_ARM_INST >= 65536
-#error "MAX_ARM_INST can't be more than 64K"
-#endif
+#define CACHE_SIZE 0x400000
+#define DRC_MAX_V810_INST 48
+#define DRC_BLOCK_SLACK 0x2000
 
 enum {
     DRC_ERR_BAD_ENTRY   = 1,
@@ -32,70 +23,22 @@ enum {
     DRC_ERR_BAD_INST    = 6,
 };
 
-enum {
-    DRC_RELOC_RBYTE     = 0,
-    DRC_RELOC_RHWORD    = 8,
-    DRC_RELOC_RWORD     = 16,
-    DRC_RELOC_WBYTE     = 24,
-    DRC_RELOC_WHWORD    = 32,
-    DRC_RELOC_WWORD     = 40,
-    DRC_RELOC_BSTR      = 48,
-    DRC_RELOC_IDIVMOD   = 64,
-    DRC_RELOC_UIDIVMOD  = 65,
-    DRC_RELOC_REV       = 66,
-    DRC_RELOC_GOLFHACK  = 67,
-    DRC_RELOC_BALLSCALE = 68,
-    DRC_RELOC_BALLSORT  = 69,
-};
+extern bool drc_ready;
 
-#define END_BLOCK 0xFF
-typedef struct {
-    WORD *phys_offset;
-    WORD size;
-    // We can use ARM_NUM_CACHE_REGS registers at a time, r4-r10, and r11 will
-    // have the address of v810_state
-    // reg_map & 0x1F would have the VB register that is mapped to r4
-    WORD reg_map;
-    bool free;
-    WORD start_pc;
-    WORD pc_range; // start_pc + pc_range = the address of the last instruction in the block
-} exec_block;
-
-typedef struct {
-    WORD PC;
-    WORD imm;
-    BYTE opcode;
-    BYTE reg1, reg2;
-    HWORD start_pos;
-    int branch_offset;
-    BYTE trans_size;
-    bool save_flags;
-    bool busywait;
-    bool is_branch_target;
-} v810_instruction;
-
-extern WORD* cache_start;
-extern WORD* cache_pos;
-
-int __divsi3(int a, int b);
-int __modsi3(int a, int b);
-unsigned int __udivsi3(unsigned int a, unsigned int b);
-unsigned int __umodsi3(unsigned int a, unsigned int b);
-
-void drc_executeBlock(WORD* entrypoint, exec_block* block);
-int drc_handleInterrupts(WORD cpsr, WORD* PC);
+int drc_handleInterrupts(WORD cpsr, WORD *PC);
 void drc_relocTable(void);
 void drc_clearCache(void);
 
-void drc_setEntry(WORD loc, WORD *entry, exec_block *block);
-exec_block* drc_getNextBlockStruct(void);
+void drc_set_enabled(bool enabled);
+bool drc_get_enabled(void);
+bool drc_available(void);
 
 void drc_init(void);
 void drc_reset(void);
 void drc_exit(void);
 int drc_run(void);
 void drc_loadSavedCache(void);
-void drc_dumpCache(char* filename);
+void drc_dumpCache(char *filename);
 void drc_dumpDebugInfo(int code);
 
-#endif //DRC_CORE_H
+#endif

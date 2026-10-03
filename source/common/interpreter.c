@@ -616,9 +616,10 @@ int interpreter_run(void) {
             RET(DRC_ERR_BAD_PC);
         }
         last_PC = PC;
-    } while (!DRC_AVAILABLE || (PC & 0x07000000) != 0x07000000);
+    } while (!DRC_AVAILABLE || !drc_ready || (PC & 0x07000000) != 0x07000000);
     S[PSW] = psw;
     st->PC = PC;
     st->cycles = cycles;
+    st->cycles_until_event_full = st->cycles_until_event_partial = (int)(target - cycles);
     return 0;
 }

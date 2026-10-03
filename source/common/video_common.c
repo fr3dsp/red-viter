@@ -41,7 +41,7 @@ int video_get_colour(int id, int brt_reg) {
 		((black_brightness * ((tVBOpt.MTINT[tVBOpt.MULTIID][0] >> 8) & 0xff) / 255) << 8) |
 		((black_brightness * ((tVBOpt.MTINT[tVBOpt.MULTIID][0] >> 16) & 0xff) / 255) << 16);
 
-	#if DRC_AVAILABLE
+	#if DRC_AVAILABLE && !defined(__vita__)
 	return __builtin_arm_uqadd8(col_tint, black_tint);
 	#else
 	return ((col_tint + black_tint) & 0xff)

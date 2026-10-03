@@ -43,7 +43,7 @@ void drc_relocTable(void) {}
 #define BROWSER_ROW_H 24
 #define MENU_PX 130
 #define MENU_PW 700
-#define MENU_ROW_H 26
+#define MENU_ROW_H 24
 
 enum {
     ACT_RESUME,
@@ -94,6 +94,8 @@ static int cfg_handler(void *user, const char *section, const char *name, const 
         if (v >= 0 && v < SCALE_COUNT) viewScale = v;
     } else if (strcmp(name, "smooth") == 0) {
         viewSmooth = atoi(value) != 0;
+    } else if (strcmp(name, "dynarec") == 0) {
+        drc_set_enabled(atoi(value) != 0);
     }
     return 1;
 }
@@ -106,7 +108,7 @@ static void load_view_config(void) {
 static void save_view_config(void) {
     FILE *f = fopen(CFG_PATH, "w");
     if (!f) return;
-    fprintf(f, "[view]\nscale=%d\nsmooth=%d\n", viewScale, viewSmooth);
+    fprintf(f, "[view]\nscale=%d\nsmooth=%d\n[emulation]\ndynarec=%d\n", viewScale, viewSmooth, drc_get_enabled() ? 1 : 0);
     fclose(f);
 }
 
@@ -468,6 +470,7 @@ enum {
     MI_FILTER,
     MI_TINT,
     MI_ANTIFLICKER,
+    MI_DYNAREC,
     MI_SAVECFG,
     MI_BROWSER,
     MI_QUIT,
@@ -484,6 +487,7 @@ static const char *menuLabels[MI_COUNT] = {
     "Scaling filter",
     "Colors",
     "Anti-flicker",
+    "Dynamic Recompiler ",
     "Save settings",
     "Close game",
     "Quit Red Viter",
@@ -509,6 +513,13 @@ static int pause_menu(bool *reset_requested) {
         snprintf(values[MI_FILTER], sizeof(values[0]), "%s", viewSmooth ? "Smooth" : "Sharp");
         snprintf(values[MI_TINT], sizeof(values[0]), "%s", tintPresets[current_tint_index()].name);
         snprintf(values[MI_ANTIFLICKER], sizeof(values[0]), "%s", tVBOpt.ANTIFLICKER ? "On" : "Off");
+        if (!drc_available()) {
+            snprintf(values[MI_DYNAREC], sizeof(values[0]), "Unavailable");
+            muted[MI_DYNAREC] = true;
+        } else {
+            snprintf(values[MI_DYNAREC], sizeof(values[0]), "%s", drc_get_enabled() ? "On" : "Off");
+            adjustable[MI_DYNAREC] = true;
+        }
         if (!emulation_hasstate(stateSlot)) {
             snprintf(values[MI_LOADSTATE], sizeof(values[0]), "empty");
             muted[MI_LOADSTATE] = true;
@@ -526,7 +537,7 @@ static int pause_menu(bool *reset_requested) {
 
         float y = 94;
         for (int i = 0; i < MI_COUNT; i++) {
-            const char *group = i == MI_RESUME ? "GAME" : i == MI_SCALE ? "DISPLAY" : i == MI_SAVECFG ? "SYSTEM" : NULL;
+            const char *group = i == MI_RESUME ? "GAME" : i == MI_SCALE ? "DISPLAY" : i == MI_DYNAREC ? "SYSTEM" : NULL;
             if (group) {
                 if (i != MI_RESUME) y += 6;
                 int gw = ui_text_width(1, group);
@@ -627,6 +638,12 @@ static int pause_menu(bool *reset_requested) {
                 case MI_ANTIFLICKER:
                     tVBOpt.ANTIFLICKER = !tVBOpt.ANTIFLICKER;
                     tVBOpt.MODIFIED = true;
+                    break;
+                case MI_DYNAREC:
+                    if (drc_available()) {
+                        drc_set_enabled(!drc_get_enabled());
+                        save_view_config();
+                    }
                     break;
                 case MI_SAVECFG:
                     if (confirm) {
