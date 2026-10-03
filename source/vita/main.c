@@ -83,6 +83,58 @@ static int stateSlot = 0;
 
 static unsigned int heldPrev;
 static int repeatFrames;
+static volatile int resumePending;
+static volatile int callbackRunning;
+static SceUID callbackThread = -1;
+
+static int power_callback(int notifyId, int notifyCount, int powerInfo, void *common) {
+    (void)notifyId;
+    (void)notifyCount;
+    (void)common;
+    if (powerInfo & (SCE_POWER_CB_APP_RESUME | SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_AFTER_SYSTEM_RESUME)) {
+        drc_reopen_vm();
+        resumePending = 1;
+    }
+    return 0;
+}
+
+static int callback_thread_main(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
+    SceUID cbid = sceKernelCreateCallback("rv_power", 0, power_callback, NULL);
+    if (cbid < 0) return cbid;
+    int r = scePowerRegisterCallback(cbid);
+    if (r < 0) {
+        sceKernelDeleteCallback(cbid);
+        return r;
+    }
+    while (callbackRunning) sceKernelDelayThreadCB(1000000);
+    scePowerUnregisterCallback(cbid);
+    sceKernelDeleteCallback(cbid);
+    return 0;
+}
+
+static void callback_thread_start(void) {
+    callbackRunning = 1;
+    callbackThread = sceKernelCreateThread("rv_power_cb", callback_thread_main, 0x10000100, 0x10000, 0, 0, NULL);
+    if (callbackThread < 0) {
+        callbackRunning = 0;
+        return;
+    }
+    if (sceKernelStartThread(callbackThread, 0, NULL) < 0) {
+        callbackRunning = 0;
+        sceKernelDeleteThread(callbackThread);
+        callbackThread = -1;
+    }
+}
+
+static void callback_thread_stop(void) {
+    if (callbackThread < 0) return;
+    callbackRunning = 0;
+    sceKernelWaitThreadEnd(callbackThread, NULL, NULL);
+    sceKernelDeleteThread(callbackThread);
+    callbackThread = -1;
+}
 
 static uint64_t now_us(void) {
     return sceKernelGetProcessTimeWide();
@@ -729,6 +781,17 @@ static int run_game(void) {
     uint64_t next_frame = now_us();
 
     for (;;) {
+        if (resumePending) {
+            resumePending = 0;
+            drc_resume();
+            heldPrev = 0;
+            repeatFrames = 0;
+            on_time = false;
+            just_lagged = false;
+            display_blanked = false;
+            next_frame = now_us();
+        }
+
         SceCtrlData pad;
         read_pad(&pad);
 
@@ -869,6 +932,7 @@ int main(void) {
     scePowerSetGpuXbarClockFrequency(166);
 
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
+    callback_thread_start();
 
     sceIoMkdir("ux0:data", 0777);
     sceIoMkdir("ux0:data/red-viter", 0777);
@@ -897,6 +961,7 @@ int main(void) {
     save_sram();
     sound_close();
     video_quit();
+    callback_thread_stop();
     sceKernelExitProcess(0);
     return 0;
 }

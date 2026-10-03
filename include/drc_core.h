@@ -28,6 +28,8 @@ extern bool drc_ready;
 int drc_handleInterrupts(WORD cpsr, WORD *PC);
 void drc_relocTable(void);
 void drc_clearCache(void);
+void drc_reopen_vm(void);
+void drc_resume(void);
 
 void drc_set_enabled(bool enabled);
 bool drc_get_enabled(void);

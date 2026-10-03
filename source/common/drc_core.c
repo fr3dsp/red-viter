@@ -1282,6 +1282,27 @@ void drc_clearCache(void) {
     if (drc_ready && entry_map) clear_blocks();
 }
 
+void drc_reopen_vm(void) {
+#ifdef __vita__
+    if (!drc_inited || cache_uid < 0 || !cache_base) return;
+    sceKernelOpenVMDomain();
+#endif
+}
+
+void drc_resume(void) {
+#ifdef __vita__
+    if (!drc_inited || cache_uid < 0 || !cache_base || !entry_map) return;
+    bool enabled = drc_user_enabled;
+    drc_ready = false;
+    drc_reopen_vm();
+    sync_failed_logged = false;
+    clear_blocks();
+    flush_icache(cache_base, blocks_start);
+    drc_ready = enabled && entry_map != NULL;
+    vita_log("drc: resume cache reset");
+#endif
+}
+
 void drc_exit(void) {
     drc_ready = false;
 #ifndef DRC_HOST_SIM
