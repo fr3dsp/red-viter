@@ -1,6 +1,7 @@
 #include <math.h>
 #include "v810_cpu.h"
 #include "v810_mem.h"
+#include "v810_ins.h"
 #include "v810_opt.h"
 #include "vb_types.h"
 #include "drc_core.h"
@@ -350,10 +351,12 @@ int interpreter_run(void) {
                     psw |= 1 << 12;
                     break;
                 case V810_OP_BSTR: {
-                    typedef bool (*bstr_func)(WORD,WORD,WORD,WORD);
-                    bstr_func func = (bstr_func)bssuboptable[reg1].func;
+                    if (reg1 > 15 || (reg1 >= 4 && reg1 <= 7)) {
+                        st->PC = last_PC;
+                        RET(DRC_ERR_BAD_INST);
+                    }
                     WORD lastarg = reg1 < 4 ? R[27] & 31 : ((R[27] & 31)) | ((R[26] & 31) << 5) | ((target - cycles) << 10);
-                    WORD res = func(R[30], R[29], R[28], lastarg);
+                    WORD res = ins_bstr(reg1, R[30], R[29], R[28], lastarg);
                     if (reg1 < 4) {
                         psw = (psw & ~1) | !res;
                     } else {

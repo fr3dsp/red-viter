@@ -22,12 +22,6 @@
 #include "vb_dsp.h"
 #include "patches.h"
 
-#include "replay.h"
-
-#ifdef __3DS__
-#include <3ds.h>
-#endif
-
 #define NEG(n) ((n) >> 31)
 #define POS(n) ((~(n)) >> 31)
 
@@ -54,9 +48,6 @@ const BYTE opcycle[0x50] = {
 };
 
 void v810_init(void) {
-    char ram_name[32];
-    unsigned int ram_size = 0;
-
     vb_state = &vb_players[0];
     memset(vb_state, 0, sizeof(*vb_state));
 
@@ -176,6 +167,7 @@ int v810_load_init(void) {
     V810_ROM1.highaddr = 0x07000000 + rom_size - 1;
 
     load_sram = fopen(tVBOpt.RAM_PATH, "rb");
+    load_sram_size = 0;
     if (load_sram) {
         struct stat mystat;
         fstat(fileno(load_sram), &mystat);
@@ -183,8 +175,10 @@ int v810_load_init(void) {
         int max_sram_size = vb_state->V810_GAME_RAM.highaddr + 1 - vb_state->V810_GAME_RAM.lowaddr;
         if (load_sram_size > max_sram_size)
             load_sram_size = max_sram_size;
-    } else {
-        load_sram_size = 0;
+        if (load_sram_size == 0) {
+            fclose(load_sram);
+            load_sram = NULL;
+        }
     }
 
     load_pos = 0;
@@ -233,7 +227,7 @@ int v810_load_step(void) {
         if (chunk_size > all_size - load_pos)
             chunk_size = all_size - load_pos;
         size_t bytes_read = fread(vb_players[0].V810_GAME_RAM.pmemory + load_pos - rom_size, 1, chunk_size, load_sram);
-        if (bytes_read == 0 && !feof(load_sram)) {
+        if (bytes_read == 0) {
             fclose(load_sram);
             return -ENETDOWN;
         }
@@ -343,9 +337,6 @@ void v810_reset(void) {
     emulated_player_id = 0;
     emulating_self = emulated_player_id == my_player_id;
     vb_state = &vb_players[emulated_player_id];
-
-    // we don't reset load_sram so it will be non-null if there was sram to load
-    replay_reset(is_sram || (bool)load_sram);
 
     // Golf might set this to RM_CPUONLY, so reset it here.
     tVBOpt.RENDERMODE = RM_TOGPU;
@@ -516,7 +507,6 @@ int serviceInt(unsigned int cycles, WORD PC) {
 }
 
 static int serviceDisplayInt(unsigned int cycles, WORD PC) {
-    int gamestart;
     unsigned int disptime = (cycles - vb_state->tVIPREG.lastdisp);
     bool pending_int = 0;
 
@@ -553,11 +543,6 @@ static int serviceDisplayInt(unsigned int cycles, WORD PC) {
                                 tDSPCACHE.SoftBufWrote[drawn_fb][i].min = 0xff;
                                 tDSPCACHE.SoftBufWrote[drawn_fb][i].max = 0;
                             }
-                            #ifdef __3DS__
-                            uint32_t fb_size;
-                            uint32_t *out_fb = (uint32_t*)C3D_Tex2DGetImagePtr(&screenTexSoft[drawn_fb], 0, &fb_size);
-                            memset(out_fb, 0, fb_size);
-                            #endif
                             tDSPCACHE.DDSPDataState[drawn_fb] = GPU_CLEAR;
                         }
                     }

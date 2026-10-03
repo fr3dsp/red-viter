@@ -11,11 +11,6 @@ extern "C" {
 #include <assert.h>
 #include "vb_types.h"
 
-#ifdef __3DS__
-#include <citro3d.h>
-#endif
-
-#define CONFIG_3D_SLIDERSTATE (*(float*)0x1FF81080)
 
 // VB input defines
 #define VB_BATERY_LOW   0x0001 // Batery Low
@@ -181,20 +176,6 @@ extern int blankTile;
 
 void setup_brightness_lut(void);
 int video_get_colour(int id, int brt_reg);
-
-#ifdef __3DS__
-
-// video_hard
-extern C3D_Tex screenTexHard[2];
-
-// video_soft
-extern C3D_Tex screenTexSoft[2];
-extern uint32_t columnTableSoft[2][96][3];
-void video_soft_init(void);
-void video_soft_to_texture(int displayed_fb);
-void video_soft_to_fb(u32 *outbuf, int displayed_fb, int src_eye, bool use_column_table, bool additive);
-
-#endif
 
 void video_hard_render(int drawn_fb);
 void video_soft_render(int drawn_fb);

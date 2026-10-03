@@ -16,8 +16,6 @@
 #define sign_5(num) (((num) & 0x0010) ? (WORD)((num)|0xFFFFFFE0) : (num))
 
 
-extern void ins_err   (int arg1, int arg2); //Special handler?
-
 //Bitstring SubOpcodes
 extern bool ins_sch0bsu (WORD src, WORD dst, WORD len, WORD offs);
 extern bool ins_sch0bsd (WORD src, WORD dst, WORD len, WORD offs);
@@ -31,6 +29,8 @@ extern int  ins_ornbsu  (WORD src, WORD dst, WORD len, SWORD offs);
 extern int  ins_andnbsu (WORD src, WORD dst, WORD len, SWORD offs);
 extern int  ins_xornbsu (WORD src, WORD dst, WORD len, SWORD offs);
 extern int  ins_notbsu  (WORD src, WORD dst, WORD len, SWORD offs);
+
+extern int  ins_bstr    (int sub, WORD src, WORD dst, WORD len, WORD offs);
 
 //FPU SubOpcodes
 extern WORD ins_rev(WORD n);   //Undocumented opcode REV (non-FPU)

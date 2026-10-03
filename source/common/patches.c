@@ -128,7 +128,6 @@ static const Patch patches[] = {
 
 void apply_patches() {
     for (int i = 0; i < sizeof(patches) / sizeof(patches[0]); i++) {
-        char *gameid = (char*)(V810_ROM1.off + (V810_ROM1.highaddr & 0xFFFFFDF9));
         if (CHECK_GAMEID(patches[i].gameid)) {
             BYTE *patch_ptr = V810_ROM1.pmemory + patches[i].address;
             if (memcmp(patch_ptr, patches[i].original, patches[i].size) == 0) {

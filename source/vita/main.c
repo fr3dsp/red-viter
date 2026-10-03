@@ -15,7 +15,6 @@
 #include "inih/ini.h"
 #include "drc_core.h"
 #include "render_thread.h"
-#include "replay.h"
 #include "v810_cpu.h"
 #include "v810_mem.h"
 #include "vb_dsp.h"
@@ -36,7 +35,7 @@ void drc_relocTable(void) {}
 #define FRAME_US 20000
 #define STICK_DEAD 60
 #define MAX_ENTRIES 4096
-#define CFG_PATH "ux0:data/red-viter/vita.cfg"
+#define CFG_PATH CONFIG_DIR "/vita.cfg"
 #define BTN_L (SCE_CTRL_LTRIGGER | SCE_CTRL_L1)
 #define BTN_R (SCE_CTRL_RTRIGGER | SCE_CTRL_R1)
 #define BROWSER_ROWS 16
@@ -239,7 +238,7 @@ static int list_dir(const char *path, Entry *entries, int max) {
     memset(&ent, 0, sizeof(ent));
     while (sceIoDread(dir, &ent) > 0 && count < max) {
         bool is_dir = SCE_S_ISDIR(ent.d_stat.st_mode);
-        if (ent.d_name[0] == '.' ) {
+        if (ent.d_name[0] == '.') {
             memset(&ent, 0, sizeof(ent));
             continue;
         }
@@ -319,7 +318,7 @@ static bool browse_rom(char *out_path, size_t out_size) {
         if (strrchr(tVBOpt.LAST_ROM, '/') == NULL) cwd[0] = 0;
     }
     if (!cwd[0] || !dir_exists(cwd)) {
-        if (dir_exists("ux0:/vb")) snprintf(cwd, sizeof(cwd), "ux0:/vb");
+        if (dir_exists(ROM_DIR)) snprintf(cwd, sizeof(cwd), "%s", ROM_DIR);
         else snprintf(cwd, sizeof(cwd), "ux0:/");
     }
 
@@ -385,7 +384,7 @@ static bool browse_rom(char *out_path, size_t out_size) {
         ui_scrollbar(SCREEN_W - 28, rows_y, rows * BROWSER_ROW_H, top, rows, total);
         if (total == 0) {
             ui_text_center(SCREEN_W / 2, 220, 2, COL_GREY, "No .vb or .zip files here");
-            ui_text_center(SCREEN_W / 2, 270, 1, COL_MUTED, "Copy your ROMs to ux0:/vb/");
+            ui_text_center(SCREEN_W / 2, 270, 1, COL_MUTED, "Copy your ROMs to " ROM_DIR "/");
         }
         ui_footer();
         float hx = 16;
@@ -664,7 +663,6 @@ static int pause_menu(bool *reset_requested) {
                         if (!emulation_hasstate(stateSlot)) {
                             snprintf(status, sizeof(status), "Slot %d is empty", stateSlot);
                         } else if (emulation_lstate(stateSlot) == 0) {
-                            clearCache();
                             goto done;
                         } else {
                             snprintf(status, sizeof(status), "Loading state failed");
@@ -699,7 +697,7 @@ static int pause_menu(bool *reset_requested) {
                     break;
                 case MI_SAVECFG:
                     if (confirm) {
-                        snprintf(status, sizeof(status), saveFileOptions() == 0 ? "Settings saved" : "Saving settings failed");
+                        snprintf(status, sizeof(status), "%s", saveFileOptions() == 0 ? "Settings saved" : "Saving settings failed");
                     }
                     break;
                 case MI_BROWSER:
@@ -889,7 +887,6 @@ static int run_game(void) {
         vb_players[0].tHReg.SLB = inputs & 0xff;
         vb_players[0].tHReg.SHB = inputs >> 8;
 
-        vb_state = &vb_players[0];
         int err = v810_run();
         if (err) {
             char msg[64];
@@ -934,8 +931,9 @@ int main(void) {
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     callback_thread_start();
 
-    sceIoMkdir("ux0:data", 0777);
-    sceIoMkdir("ux0:data/red-viter", 0777);
+    sceIoMkdir(CONFIG_DIR_PARENT, 0777);
+    sceIoMkdir(CONFIG_DIR, 0777);
+    sceIoMkdir(ROM_DIR, 0777);
 
     vglInitExtended(0, SCREEN_W, SCREEN_H, 0x1800000, SCE_GXM_MULTISAMPLE_NONE);
     vglWaitVblankStart(GL_TRUE);
@@ -945,7 +943,6 @@ int main(void) {
     load_view_config();
 
     v810_init();
-    replay_init();
     video_init();
     ui_init();
     sound_init();

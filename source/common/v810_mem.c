@@ -814,7 +814,6 @@ static HWORD vipcreg_rhword(WORD addr) {
 }
 
 static WORD vipcreg_whword(WORD addr, WORD data) {
-    int i;
     addr=(addr&0x0005007E); //Bring it into line
     addr=(addr|0x0005F800); //make shure all the right bits are on
     switch(addr) {

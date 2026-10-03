@@ -13,5 +13,5 @@ Requirements: VitaSDK, vitaGL, vitaShaRK, mathneon, zlib.
 ## Setup
 
 - Install the VPK.
-- Put ROMs (`.vb` or `.zip`) in `ux0:/vb/`.
-- Data (config, saves, states) lives in `ux0:data/red-viter/`. Shader or audio errors are written to `ux0:data/red-viter/log.txt`.
+- Put ROMs (`.vb` or `.zip`) in `ux0:data/redviter/roms/`.
+- Data (config, saves, states) lives in `ux0:data/redviter/`. Shader or audio errors are written to `ux0:data/redviter/log.txt`.

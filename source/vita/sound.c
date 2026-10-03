@@ -75,7 +75,7 @@ bool sound_init_backend(int16_t *wavebufs[]) {
     return true;
 }
 
-void sound_close_backend() {
+void sound_close_backend(void) {
     if (audioPort < 0) return;
     audioRunning = 0;
     if (audioThread >= 0) {
@@ -87,11 +87,11 @@ void sound_close_backend() {
     audioPort = -1;
 }
 
-void sound_pause_backend() {
+void sound_pause_backend(void) {
     audioPaused = 1;
 }
 
-void sound_resume_backend() {
+void sound_resume_backend(void) {
     audioPaused = 0;
 }
 

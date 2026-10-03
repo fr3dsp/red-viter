@@ -15,11 +15,7 @@
 #define DRC_BLOCK_SLACK 0x2000
 
 enum {
-    DRC_ERR_BAD_ENTRY   = 1,
     DRC_ERR_BAD_PC      = 2,
-    DRC_ERR_NO_DYNAREC  = 3,
-    DRC_ERR_NO_BLOCKS   = 4,
-    DRC_ERR_CACHE_FULL  = 5,
     DRC_ERR_BAD_INST    = 6,
 };
 
@@ -37,10 +33,6 @@ bool drc_available(void);
 
 void drc_init(void);
 void drc_reset(void);
-void drc_exit(void);
 int drc_run(void);
-void drc_loadSavedCache(void);
-void drc_dumpCache(char *filename);
-void drc_dumpDebugInfo(int code);
 
 #endif

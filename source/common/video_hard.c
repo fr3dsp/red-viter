@@ -23,11 +23,7 @@ void video_hard_init(void) {
 	vbuf = linearAlloc(sizeof(vertex) * VBUF_SIZE);
 	avbuf = linearAlloc(sizeof(avertex) * AVBUF_SIZE);
 
-	#ifdef __vita__
 	rgba4_framebuffers = linearAlloc(384 * DOWNLOADED_FRAMEBUFFER_WIDTH * 2 * 4);
-#else
-	rgba4_framebuffers = linearAlloc(384 * DOWNLOADED_FRAMEBUFFER_WIDTH * 2 * 2);
-#endif
 
 	gpu_set_opaque(false);
 }
@@ -213,7 +209,6 @@ void video_hard_render(int drawn_fb) {
 				vcount = 0;
 
 				int left_mx = base_mx - abs(mp);
-				int right_mx = base_mx + abs(mp);
 				int left_gx = base_gx - abs(gp);
 				int right_gx = base_gx + abs(gp);
 
@@ -306,9 +301,6 @@ void video_hard_render(int drawn_fb) {
 				u16 param_base = worlds[wrld].param;
 				s16 *params = (s16 *)(rvb->V810_DISPLAY_RAM.off + 0x20000 + param_base * 2);
 
-				int full_w = 512 * scx;
-				int full_h = 512 * scy;
-
 				// initial bounds calculation setup
 				int umin, vmin, umax, vmax;
 				if (worlds[wrld].bgm == 1) {
@@ -323,7 +315,6 @@ void video_hard_render(int drawn_fb) {
 				}
 
 				// set up vertex buffers
-				int vbuf_count = 0;
 				avertex *vbufs[2] = {NULL, NULL};
 				for (int eye = start_eye; eye < end_eye; eye++) {
 					if (!(worlds[wrld].on & (2 >> eye)))

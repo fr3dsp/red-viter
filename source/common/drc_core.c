@@ -925,10 +925,8 @@ static WORD h_reti(WORD cpsr) {
 
 static uint64_t h_bstr(WORD cpsr, WORD reg1, WORD pc, WORD next_pc) {
     cpu_state *st = &vb_state->v810_state;
-    typedef bool (*bstr_func)(WORD, WORD, WORD, WORD);
-    bstr_func func = (bstr_func)bssuboptable[reg1].func;
     WORD lastarg = reg1 < 4 ? st->P_REG[27] & 31 : (st->P_REG[27] & 31) | ((st->P_REG[26] & 31) << 5) | ((WORD)st->cycles_until_event_partial << 10);
-    WORD res = func(st->P_REG[30], st->P_REG[29], st->P_REG[28], lastarg);
+    WORD res = ins_bstr(reg1, st->P_REG[30], st->P_REG[29], st->P_REG[28], lastarg);
     WORD out_cpsr = cpsr;
     WORD out_pc = next_pc;
     if (reg1 < 4) {
@@ -1173,11 +1171,15 @@ static bool alloc_cache(void) {
         int r = sceKernelGetMemBlockBase(cache_uid, &base);
         if (r < 0) {
             vita_log("drc: block base failed 0x%08x", r);
+            sceKernelFreeMemBlock(cache_uid);
+            cache_uid = -1;
             return false;
         }
         r = sceKernelOpenVMDomain();
         if (r < 0) {
             vita_log("drc: open domain failed 0x%08x", r);
+            sceKernelFreeMemBlock(cache_uid);
+            cache_uid = -1;
             return false;
         }
         cache_base = base;
@@ -1303,15 +1305,6 @@ void drc_resume(void) {
 #endif
 }
 
-void drc_exit(void) {
-    drc_ready = false;
-#ifndef DRC_HOST_SIM
-    free(entry_map);
-#endif
-    entry_map = NULL;
-    map_count = 0;
-}
-
 int drc_run(void) {
     cpu_state *st = &vb_state->v810_state;
     while (!st->ret && (st->PC & 0x07000000) == 0x07000000) {
@@ -1352,17 +1345,6 @@ uint64_t sim_call_helper(int id, WORD a0, WORD a1, WORD a2, WORD a3) {
     return 0;
 }
 #endif
-
-void drc_loadSavedCache(void) {
-}
-
-void drc_dumpCache(char *filename) {
-    (void)filename;
-}
-
-void drc_dumpDebugInfo(int code) {
-    (void)code;
-}
 
 #else
 

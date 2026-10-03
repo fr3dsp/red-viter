@@ -42,10 +42,6 @@ static int get_readwrite_cycles(WORD addr) {
 }
 
 //The Instructions
-void ins_err(int arg1, int arg2) { //Mode1/2
-    //dtprintf(6,ferr,"\nInvalid code! err");
-}
-
 //Bitstring routines, wrapper functions for bitstring instructions!
 void get_bitstr(WORD *str, WORD src, WORD srcoff, WORD len) {
     WORD i=0,tword,tmp;
@@ -2136,4 +2132,22 @@ WORD ins_rev(WORD n) {
     // reverse bytes
     n = __builtin_bswap32(n);
     return n;
+}
+
+int ins_bstr(int sub, WORD src, WORD dst, WORD len, WORD offs) {
+    switch (sub) {
+        case V810_OP_SCH0BSU: return ins_sch0bsu(src, dst, len, offs);
+        case V810_OP_SCH0BSD: return ins_sch0bsd(src, dst, len, offs);
+        case V810_OP_SCH1BSU: return ins_sch1bsu(src, dst, len, offs);
+        case V810_OP_SCH1BSD: return ins_sch1bsd(src, dst, len, offs);
+        case V810_OP_ORBSU:   return ins_orbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_ANDBSU:  return ins_andbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_XORBSU:  return ins_xorbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_MOVBSU:  return ins_movbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_ORNBSU:  return ins_ornbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_ANDNBSU: return ins_andnbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_XORNBSU: return ins_xornbsu(src, dst, len, (SWORD)offs);
+        case V810_OP_NOTBSU:  return ins_notbsu(src, dst, len, (SWORD)offs);
+        default:              return 0;
+    }
 }

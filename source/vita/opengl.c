@@ -616,7 +616,7 @@ static void set_color_uniform(GLint loc, int id, int brt) {
 }
 
 static void present_rect(int *x, int *y, int *w, int *h) {
-    int sw = 960, sh = 544;
+    int sw = SCREEN_W, sh = SCREEN_H;
     int dw, dh;
     if (presentScale == 0) {
         dw = 384 * 2;
@@ -647,7 +647,7 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);
-    glViewport(0, 0, 960, 544);
+    glViewport(0, 0, SCREEN_W, SCREEN_H);
 
     if (!antiflickerBlend) {
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

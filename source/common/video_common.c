@@ -161,7 +161,6 @@ int videoProcessingTime(void) {
 						}
 
 						bool start = gy >= y;
-						bool end = gy + h + 1 <= y + 8;
 
 						time += start ? 13 : 14;
 

@@ -1,11 +1,7 @@
 #include <stdio.h>
-#include <unistd.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <assert.h>
-
-#ifdef __3DS__
-#include <3ds.h>
-#endif
 
 #include "vb_types.h"
 #include "v810_cpu.h"
@@ -15,77 +11,16 @@
 #include "vb_set.h"
 #include "vb_sound.h"
 
-#ifdef __3DS__
-#define GUI_STUB(void) { \
-    consoleClear(); \
-    printf("STUBBED"); \
-    waitForInput(); \
-}
-#else
-#define GUI_STUB()
-#define consoleClear()
-#endif
-
-struct stat st = {0};
-int guiop;
-
-u32 waitForInput(void) {
-#ifdef __3DS__
-    u32 keys;
-    do {
-        hidScanInput();
-        gfxFlushBuffers();
-        gfxSwapBuffers();
-        gspWaitForVBlank();
-    } while (!(keys = hidKeysDown()));
-
-    return keys;
-#else
-    return getc(stdin);
-#endif
-}
-
-#ifdef __3DS__
-Thread save_thread = NULL;
-#else
-void *save_thread = NULL;
-#endif
-
-static void save_sram_thread(void *sram) {
-    FILE *nvramf = fopen(tVBOpt.RAM_PATH, "wb");
-
-    // Save out the sram ram
-    if (nvramf == NULL) {
-        printf("\nError opening sram.bin");
-        return;
-    }
-    fwrite(sram, 1, vb_players[my_player_id].V810_GAME_RAM.size, nvramf);
-    fclose(nvramf);
-
-    free(sram);
-
-    save_thread = NULL;
-}
+static struct stat st;
 
 void save_sram(void) {
-    // Do not save sram if it's not required!
     if (!is_sram) return;
-    // Don't save if there is no save path
     if (tVBOpt.RAM_PATH[0] == 0) return;
-    // Don't save if we're already saving
-    if (save_thread) return;
     V810_MEMORYFETCH *sram = &vb_players[my_player_id].V810_GAME_RAM;
-    void *sram_copy = malloc(sram->size);
-    memcpy(sram_copy, sram->pmemory, sram->size);
-#ifdef __3DS__
-    // Saving on the same thread is slow, but saving in another thread happens instantly
-    save_thread = threadCreate(save_sram_thread, sram_copy, 4000, 0x18, 1, true);
-    if (!save_thread) {
-        puts("oh no");
-    }
-#else
-    save_sram_thread(sram_copy);
-#endif
+    FILE *f = fopen(tVBOpt.RAM_PATH, "wb");
+    if (f == NULL) return;
+    fwrite(sram->pmemory, 1, sram->size, f);
+    fclose(f);
 }
 
 char * get_savestate_path(int state, bool write) {
@@ -98,8 +33,8 @@ char * get_savestate_path(int state, bool write) {
     snprintf(sshome, sizeof(sshome), "%s/savestates", tVBOpt.HOME_PATH);
     // $HOME/savestates/game
     char *sspath = (char *) malloc(MAX_PATH_LEN * sizeof(char));
+    if (sspath == NULL) return NULL;
     snprintf(sspath, MAX_PATH_LEN, "%s/%s", sshome, last_slash + 1);
-    int sspath_len = strlen(sspath);
     char *end = strrchr(sspath, '.');
     if (!end) end = sspath + strlen(sspath);
     if (end - sspath + 20 >= MAX_PATH_LEN) goto bail;
@@ -129,16 +64,6 @@ bool emulation_hasstate(int state) {
     return result;
 }
 
-int emulation_rmstate(int state) {
-    char* sspath = get_savestate_path(state, false);
-    if (sspath == NULL) return 1;
-
-    int result = remove(sspath);
-    free(sspath);
-
-    return result;
-}
-
 int emulation_sstate(int state) {
     FILE* state_file;
     char* sspath = get_savestate_path(state, true);
@@ -147,7 +72,6 @@ int emulation_sstate(int state) {
     state_file = fopen(sspath, "wb");
     free(sspath);
     if(state_file==NULL) {
-//        alert("Error creating file!", "Check that you have permission to write", NULL, b_ok, NULL, 1, (int)NULL);
         return 1;
     }
 
@@ -207,8 +131,6 @@ int emulation_sstate(int state) {
 }
 
 int emulation_lstate(int state) {
-    int i;
-    int ret;
     uint32_t size;
     uint32_t id,ver,crc;
     FILE* state_file;
@@ -379,7 +301,7 @@ int emulation_lstate(int state) {
         goto bail;
     }
     //Validity checks
-    if (new_vipreg.tDisplayedFB > 2 ||
+    if (new_vipreg.tDisplayedFB >= 2 ||
         new_vipreg.rowcount > 0x21
     ) {
         goto bail;
@@ -483,15 +405,6 @@ int emulation_lstate(int state) {
         }
     }
 
-    #ifdef __3DS__
-    clearCache();
-    C3D_FrameBegin(0);
-    video_render((vb_state->tVIPREG.tDisplayedFB) % 2, false);
-    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-    C3D_FrameEnd(0);
-    #endif
-
-    guiop = AKILL;
     return 0;
 
     bail:

@@ -27,7 +27,7 @@ static vec2f textPos[MAX_TEXT * 6];
 static vec2f textUv[MAX_TEXT * 6];
 
 void vita_log(const char *fmt, ...) {
-    FILE *f = fopen("ux0:data/red-viter/log.txt", "a");
+    FILE *f = fopen("ux0:data/redviter/log.txt", "a");
     if (!f) return;
     va_list ap;
     va_start(ap, fmt);
@@ -39,6 +39,7 @@ void vita_log(const char *fmt, ...) {
 
 void ui_init(void) {
     unsigned int *pixels = calloc(ATLAS_W * ATLAS_H, sizeof(unsigned int));
+    if (!pixels) return;
     for (int g = 0; g < FONT_COUNT; g++) {
         int ox = (g % ATLAS_COLS) * FONT_W;
         int oy = (g / ATLAS_COLS) * FONT_H;
@@ -77,8 +78,14 @@ void ui_begin(float r, float g, float b) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
+static vec4f unpack_color(unsigned int rgba) {
+    vec4f c = {((rgba >> 24) & 0xff) / 255.0f, ((rgba >> 16) & 0xff) / 255.0f, ((rgba >> 8) & 0xff) / 255.0f, (rgba & 0xff) / 255.0f};
+    return c;
+}
+
 static void set_color(unsigned int rgba) {
-    glColor4f(((rgba >> 24) & 0xff) / 255.0f, ((rgba >> 16) & 0xff) / 255.0f, ((rgba >> 8) & 0xff) / 255.0f, (rgba & 0xff) / 255.0f);
+    vec4f c = unpack_color(rgba);
+    glColor4f(c.r, c.g, c.b, c.a);
 }
 
 void ui_rect(float x, float y, float w, float h, unsigned int rgba) {
@@ -150,11 +157,6 @@ void ui_text(float x, float y, int scale, unsigned int rgba, const char *fmt, ..
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisable(GL_TEXTURE_2D);
-}
-
-static vec4f unpack_color(unsigned int rgba) {
-    vec4f c = {((rgba >> 24) & 0xff) / 255.0f, ((rgba >> 16) & 0xff) / 255.0f, ((rgba >> 8) & 0xff) / 255.0f, (rgba & 0xff) / 255.0f};
-    return c;
 }
 
 void ui_text_right(float xr, float y, int scale, unsigned int rgba, const char *fmt, ...) {

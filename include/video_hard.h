@@ -1,18 +1,12 @@
 #include "vb_types.h"
 #include "vb_dsp.h"
 
-#ifdef __3DS__
-#include <citro3d.h>
-typedef C3D_Tex Texture;
-typedef C3D_RenderTarget *Framebuffer;
-#else
 #ifdef __vita__
 #include <vitaGL.h>
 #else
 #include <GLES2/gl2.h>
 #endif
 typedef GLuint Texture, Framebuffer;
-#endif
 
 extern Framebuffer screenTargetHard[2];
 

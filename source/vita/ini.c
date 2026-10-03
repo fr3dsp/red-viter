@@ -16,15 +16,6 @@ static char *trim(char *s) {
     return s;
 }
 
-static void strip_inline_comment(char *s) {
-    for (char *p = s; *p; p++) {
-        if ((*p == ';' || *p == '#') && p > s && isspace((unsigned char)p[-1])) {
-            *p = 0;
-            return;
-        }
-    }
-}
-
 int ini_parse(const char *filename, ini_handler handler, void *user) {
     FILE *f = fopen(filename, "r");
     if (!f) return -1;
@@ -63,7 +54,6 @@ int ini_parse(const char *filename, ini_handler handler, void *user) {
         *eq = 0;
         char *name = trim(start);
         char *value = eq + 1;
-        strip_inline_comment(value);
         value = trim(value);
         if (strlen(name) >= MAX_NAME) {
             if (!first_error) first_error = lineno;

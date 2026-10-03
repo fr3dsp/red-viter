@@ -1,7 +1,3 @@
-#ifdef __3DS__
-#include <3ds.h>
-#endif
-
 #include "v810_mem.h"
 #include "vb_set.h"
 #include "vb_sound.h"
@@ -335,16 +331,15 @@ void sound_init(void) {
     for (int i = 0; i < BUF_COUNT; i++) {
         wavebufs[i] = linearAlloc(sizeof(int16_t) * SAMPLE_COUNT * 2);
     }
-    if (!sound_init_backend(wavebufs)) {
-        for (int i = 0; i < BUF_COUNT; i++) {
-            linearFree(wavebufs[i]);
-        }
-    }
+    sound_init_backend(wavebufs);
 }
 
 void sound_close(void) {
     sound_close_backend();
-    for (int i = 0; i < BUF_COUNT; i++) linearFree(wavebufs[i]);
+    for (int i = 0; i < BUF_COUNT; i++) {
+        linearFree(wavebufs[i]);
+        wavebufs[i] = NULL;
+    }
 }
 
 void sound_pause(void) {
