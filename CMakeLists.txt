@@ -46,12 +46,16 @@ target_link_libraries(${PROJECT_NAME}
   SceSysmodule_stub
   SceAppMgr_stub
   SceCommonDialog_stub
+  SceShellSvc_stub
   SceKernelDmacMgr_stub
   SceLibKernel_stub
   SceSysmem_stub
   SceIofilemgr_stub
 )
 
+if(NOT VITA_MAKE_FSELF_FLAGS MATCHES "(^| )-a( |$)")
+  set(VITA_MAKE_FSELF_FLAGS "${VITA_MAKE_FSELF_FLAGS} -a 0x2800000000000001" CACHE STRING "vita-make-fself flags" FORCE)
+endif()
 vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
 vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
   VERSION ${VITA_VERSION}

@@ -204,7 +204,7 @@ void sound_update(uint32_t cycles) {
                 #undef AMPLIFY
                 int extra_offset = dc_offset - (-left - right + dc_offset * 48) / 50;
                 if (left < dc_offset || right < dc_offset) {
-                    int extra_offset = 0;
+                    extra_offset = 0;
                     if (left < dc_offset)
                         extra_offset = left - 0x7fff;
                     if (right < dc_offset && right - 0x7fff > extra_offset)

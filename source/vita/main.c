@@ -4,6 +4,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/power.h>
+#include <psp2/shellutil.h>
 #include <vitaGL.h>
 
 #include <errno.h>
@@ -85,6 +86,20 @@ static int repeatFrames;
 static volatile int resumePending;
 static volatile int callbackRunning;
 static SceUID callbackThread = -1;
+static bool psButtonLocked;
+
+#define PS_BUTTON_LOCKS (SCE_SHELL_UTIL_LOCK_TYPE_PS_BTN | SCE_SHELL_UTIL_LOCK_TYPE_PS_BTN_2)
+
+static void ps_button_lock(void) {
+    if (psButtonLocked) return;
+    if (sceShellUtilLock(PS_BUTTON_LOCKS) >= 0) psButtonLocked = true;
+}
+
+static void ps_button_unlock(void) {
+    if (!psButtonLocked) return;
+    sceShellUtilUnlock(PS_BUTTON_LOCKS);
+    psButtonLocked = false;
+}
 
 static int power_callback(int notifyId, int notifyCount, int powerInfo, void *common) {
     (void)notifyId;
@@ -553,6 +568,7 @@ static int pause_menu(bool *reset_requested) {
     sound_pause();
     save_sram();
     wait_release();
+    ps_button_unlock();
 
     for (;;) {
         char values[MI_COUNT][64];
@@ -718,6 +734,7 @@ static int pause_menu(bool *reset_requested) {
 
 done:
     wait_release();
+    ps_button_lock();
     clearCache();
     sound_refresh();
     return action;
@@ -776,6 +793,7 @@ static int run_game(void) {
     clearCache();
     sound_refresh();
     heldPrev = 0;
+    ps_button_lock();
     uint64_t next_frame = now_us();
 
     for (;;) {
@@ -793,7 +811,7 @@ static int run_game(void) {
         SceCtrlData pad;
         read_pad(&pad);
 
-        if ((pad.buttons & BTN_L) && (pad.buttons & BTN_R) && (pad.buttons & SCE_CTRL_START)) {
+        if (pad.buttons & SCE_CTRL_PSBUTTON) {
             bool reset = false;
             int act = pause_menu(&reset);
             if (act == ACT_QUIT || act == ACT_BROWSER) {
@@ -919,6 +937,7 @@ static int run_game(void) {
 
     save_sram();
     sound_pause();
+    ps_button_unlock();
     return action;
 }
 
@@ -928,6 +947,7 @@ int main(void) {
     scePowerSetGpuClockFrequency(222);
     scePowerSetGpuXbarClockFrequency(166);
 
+    sceShellUtilInitEvents(0);
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     callback_thread_start();
 
@@ -958,6 +978,7 @@ int main(void) {
     save_sram();
     sound_close();
     video_quit();
+    ps_button_unlock();
     callback_thread_stop();
     sceKernelExitProcess(0);
     return 0;

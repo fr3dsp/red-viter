@@ -8,16 +8,18 @@
 #include "vita_ui.h"
 
 #define OUT_RATE 48000
-#define OUT_GRAIN 512
+#define OUT_GRAIN 960
 #define OUT_FRAMES (SAMPLE_COUNT * OUT_RATE / SAMPLE_RATE)
 #define RING_FRAMES 8192
 #define RING_MASK (RING_FRAMES - 1)
-#define MAX_QUEUED (OUT_FRAMES * 4)
+#define PREBUFFER_FRAMES (OUT_GRAIN * 2)
+#define MAX_QUEUED (OUT_GRAIN * 4)
 
 static int audioPort = -1;
 static SceUID audioThread = -1;
 static volatile int audioRunning;
 static volatile int audioPaused;
+static volatile int audioPrimed;
 static int16_t ring[RING_FRAMES * 2];
 static volatile uint32_t ringWrite;
 static volatile uint32_t ringRead;
@@ -31,6 +33,14 @@ static int audio_thread_main(SceSize args, void *argp) {
         if (audioPaused) {
             memset(block, 0, sizeof(block));
             ringRead = w;
+            audioPrimed = 0;
+        } else if (!audioPrimed) {
+            if (avail < PREBUFFER_FRAMES) {
+                sceKernelDelayThread(1000);
+                continue;
+            }
+            audioPrimed = 1;
+            continue;
         } else {
             uint32_t n = avail < OUT_GRAIN ? avail : OUT_GRAIN;
             for (uint32_t i = 0; i < n; i++) {
@@ -61,6 +71,7 @@ bool sound_init_backend(int16_t *wavebufs[]) {
     ringWrite = 0;
     ringRead = 0;
     audioPaused = 0;
+    audioPrimed = 0;
     audioRunning = 1;
     audioThread = sceKernelCreateThread("rv_audio", audio_thread_main, 0x10000100, 0x10000, 0, 0, NULL);
     if (audioThread < 0) {
@@ -89,9 +100,12 @@ void sound_close_backend(void) {
 
 void sound_pause_backend(void) {
     audioPaused = 1;
+    audioPrimed = 0;
 }
 
 void sound_resume_backend(void) {
+    ringRead = ringWrite;
+    audioPrimed = 0;
     audioPaused = 0;
 }
 
@@ -99,6 +113,7 @@ bool sound_push_backend(int16_t *buf) {
     if (audioPort < 0) return false;
     uint32_t w = ringWrite;
     uint32_t queued = w - ringRead;
+    if (queued + OUT_FRAMES > RING_FRAMES) return false;
     if (queued > MAX_QUEUED) return false;
 
     for (int i = 0; i < OUT_FRAMES; i++) {
