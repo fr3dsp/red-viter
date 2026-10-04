@@ -57,7 +57,7 @@ static void render_core(const RenderJob *job) {
     g_displayed_fb = displayed_fb;
     vip_displayed_fb = tVBOpt.DOUBLE_BUFFER ? displayed_fb : 0;
 
-    eye_count = tVBOpt.ANAGLYPH || tVBOpt.RENDERMODE == RM_TOCPU ? 2 : 1;
+    eye_count = tVBOpt.RENDERMODE == RM_TOCPU ? 2 : 1;
 
     if (tVBOpt.RENDERMODE == RM_TOGPU || tVBOpt.RENDERMODE == RM_TOCPU || tVBOpt.RENDERMODE == RM_CPUONLY) {
         gpu_soft_to_texture(displayed_fb);

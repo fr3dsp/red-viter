@@ -30,7 +30,6 @@ static int handler(void *user, const char *section, const char *name, const char
         if (strcmp(name, "multicol") == 0) c->MULTICOL = atoi(value);
         else if (strcmp(name, "tint") == 0) c->TINT = atoi(value);
         else if (strcmp(name, "multicolid") == 0) c->MULTIID = atoi(value);
-        else if (strcmp(name, "default_eye") == 0) c->DEFAULT_EYE = atoi(value);
         else if (strcmp(name, "antiflicker") == 0) c->ANTIFLICKER = atoi(value);
         else if (strcmp(name, "vip_overclock") == 0) c->VIP_OVERCLOCK = atoi(value);
         else if (strcmp(name, "lastrom") == 0) {
@@ -45,9 +44,6 @@ static int handler(void *user, const char *section, const char *name, const char
         } else if (parse_indexed(name, "tintscale", 1, 3, &i)) {
             c->STINT[0][i - 1] = atof(value);
         }
-    } else if (strcmp(section, "anaglyph") == 0) {
-        if (strcmp(name, "left") == 0) c->ANAGLYPH_LEFT = atoi(value);
-        else if (strcmp(name, "right") == 0) c->ANAGLYPH_RIGHT = atoi(value);
     } else if (strncmp(section, "palette", 7) == 0 && section[7] >= '0' && section[7] <= '3' && section[8] == 0) {
         set_palette_value(c, section[7] - '0', name, value);
     }
@@ -75,8 +71,6 @@ void setDefaults(void) {
     tVBOpt.MTINT[3][0] = 0xffffff;
     tVBOpt.STINT[3][0] = tVBOpt.STINT[3][1] = tVBOpt.STINT[3][2] = 1.0;
 
-    tVBOpt.ANAGLYPH_LEFT = 0b001;
-    tVBOpt.ANAGLYPH_RIGHT = 0b110;
     snprintf(tVBOpt.HOME_PATH, sizeof(tVBOpt.HOME_PATH), "%s", DEFAULT_HOME_PATH);
 }
 
@@ -125,14 +119,10 @@ static void writeOptionsFile(FILE *f) {
     fprintf(f, "multicol=%d\n", tVBOpt.MULTICOL);
     fprintf(f, "tint=%d\n", tVBOpt.TINT);
     fprintf(f, "multicolid=%d\n", tVBOpt.MULTIID);
-    fprintf(f, "default_eye=%d\n", tVBOpt.DEFAULT_EYE);
     fprintf(f, "antiflicker=%d\n", tVBOpt.ANTIFLICKER);
     fprintf(f, "vip_overclock=%d\n", tVBOpt.VIP_OVERCLOCK);
     fprintf(f, "lastrom=%s\n", tVBOpt.LAST_ROM);
     fprintf(f, "homepath=%s\n", tVBOpt.HOME_PATH);
-    fprintf(f, "\n[anaglyph]\n");
-    fprintf(f, "left=%d\n", tVBOpt.ANAGLYPH_LEFT);
-    fprintf(f, "right=%d\n", tVBOpt.ANAGLYPH_RIGHT);
     for (int i = 0; i < 4; i++) {
         fprintf(f, "\n[palette%d]\n", i);
         for (int j = 0; j < 4; j++) fprintf(f, "tint%d=%d\n", j, tVBOpt.MTINT[i][j]);

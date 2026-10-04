@@ -27,16 +27,12 @@ typedef struct VB_OPT {
     int   FASTFORWARD;
     RENDERMODE_t RENDERMODE;
     bool  SOFT_FLUSH;
-    int   DEFAULT_EYE;
     char  ROM_PATH[300];
     char  RAM_PATH[300];
     char  LAST_ROM[300];
     char  HOME_PATH[240];
     unsigned long CRC32;
     int   GAME_ID;
-    bool  ANAGLYPH;
-    int   ANAGLYPH_LEFT;
-    int   ANAGLYPH_RIGHT;
     bool  GAME_SETTINGS;
     bool  MODIFIED;
     bool  ANTIFLICKER;

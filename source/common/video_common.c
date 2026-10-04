@@ -25,18 +25,18 @@ void setup_brightness_lut(void) {
 
 int video_get_colour(int id, int brt_reg) {
 	if (id == 0) {
-		return tVBOpt.MULTICOL && !tVBOpt.ANAGLYPH ? tVBOpt.MTINT[tVBOpt.MULTIID][0] : 0;
+		return tVBOpt.MULTICOL ? tVBOpt.MTINT[tVBOpt.MULTIID][0] : 0;
 	}
-	int brightness = clamp255(brightness_lut[clamp255(brt_reg)] * (tVBOpt.MULTICOL && !tVBOpt.ANAGLYPH ? tVBOpt.STINT[tVBOpt.MULTIID][id - 1] : 1));
-	int fulltint = tVBOpt.ANAGLYPH ? 0xffffff : tVBOpt.MULTICOL ? tVBOpt.MTINT[tVBOpt.MULTIID][id] : tVBOpt.TINT;
+	int brightness = clamp255(brightness_lut[clamp255(brt_reg)] * (tVBOpt.MULTICOL ? tVBOpt.STINT[tVBOpt.MULTIID][id - 1] : 1));
+	int fulltint = tVBOpt.MULTICOL ? tVBOpt.MTINT[tVBOpt.MULTIID][id] : tVBOpt.TINT;
 	int col_tint =
 		((brightness * ((fulltint) & 0xff) / 255)) |
 		((brightness * ((fulltint >> 8) & 0xff) / 255) << 8) |
 		((brightness * ((fulltint >> 16) & 0xff) / 255) << 16);
-	if (tVBOpt.ANAGLYPH || !tVBOpt.MULTICOL) return col_tint;
+	if (!tVBOpt.MULTICOL) return col_tint;
 
 	int black_brightness = 255 - brightness;
-	int black_tint = tVBOpt.ANAGLYPH ? 0 :
+	int black_tint =
 		((black_brightness * ((tVBOpt.MTINT[tVBOpt.MULTIID][0]) & 0xff) / 255)) |
 		((black_brightness * ((tVBOpt.MTINT[tVBOpt.MULTIID][0] >> 8) & 0xff) / 255) << 8) |
 		((black_brightness * ((tVBOpt.MTINT[tVBOpt.MULTIID][0] >> 16) & 0xff) / 255) << 16);

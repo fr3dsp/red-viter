@@ -131,10 +131,10 @@ static const char *kAffineFragment =
     "    float mapIndex = floor(uStartMap + subMap);\n"
     "    float mapRow = floor(mapIndex / 4.0);\n"
     "    float mapCol = mapIndex - 4.0 * mapRow;\n"
-    "    float visHalf = floor(uVisMask / exp2(subMap)) / 2.0;\n"
+    "    float visHalf = floor(uVisMask / exp2(subMap) + 0.001) / 2.0;\n"
     "    float visible = (visHalf - floor(visHalf)) * 2.0;\n"
-    "    vec2 frac = tc.yx - floor(tc.yx);\n"
-    "    vec4 color = texture2D(sTex, (frac + vec2(mapCol, mapRow)) * vec2(0.25, 0.5));\n"
+    "    vec2 cellUV = tc.yx - floor(tc.yx);\n"
+    "    vec4 color = texture2D(sTex, (cellUV + vec2(mapCol, mapRow)) * vec2(0.25, 0.5));\n"
     "    gl_FragColor = color * (inside * visible);\n"
     "}\n";
 
@@ -627,8 +627,7 @@ void gpu_soft_to_texture(int displayed_fb) {
     } else {
         return;
     }
-    int start_eye = eye_count == 2 ? 0 : tVBOpt.DEFAULT_EYE;
-    for (int eye = start_eye; eye < start_eye + eye_count; eye++) {
+    for (int eye = 0; eye < eye_count; eye++) {
         for (int x = 0; x < 384; x++) {
             uint32_t *in_fb_ptr = (uint32_t *)(rvb->V810_DISPLAY_RAM.off + 0x10000 * eye + 0x8000 * displayed_fb + x * (256 / 4));
             u32 *out_fb = screenTexSoftBuffer + x * 512 + eye * 256;
@@ -842,30 +841,13 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
         0, 0,
         0, 384.0f / 512.0f};
 
-    int eye_shift = eye_count == 2 ? 0 : tVBOpt.DEFAULT_EYE;
-    for (int i = 0; i < 4; i++) {
-        texcoords[i * 2] += 0.5f * eye_shift;
-    }
-
     glEnableVertexAttribArray(F->pos);
     glEnableVertexAttribArray(F->tex);
     glVertexAttribPointer(F->pos, 2, GL_FLOAT, GL_FALSE, 0, positions);
     glVertexAttribPointer(F->tex, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
-    if (columnVarying) glUniform1f(F->row, eye_shift * 3.0f);
+    if (columnVarying) glUniform1f(F->row, 0.0f);
 
-    if (tVBOpt.ANAGLYPH) {
-        glColorMask(tVBOpt.ANAGLYPH_LEFT & 1, tVBOpt.ANAGLYPH_LEFT & 2, tVBOpt.ANAGLYPH_LEFT & 4, GL_TRUE);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        for (int i = 0; i < 4; i++) {
-            texcoords[i * 2] += 0.5f;
-        }
-        glColorMask(tVBOpt.ANAGLYPH_RIGHT & 1, tVBOpt.ANAGLYPH_RIGHT & 2, tVBOpt.ANAGLYPH_RIGHT & 4, GL_TRUE);
-        if (columnVarying) glUniform1f(F->row, 3.0f);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    } else {
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    }
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
     glDisableVertexAttribArray(F->pos);
     glDisableVertexAttribArray(F->tex);

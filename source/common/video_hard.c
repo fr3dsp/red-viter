@@ -145,8 +145,8 @@ int render_affine_cache(int mapid, vertex *vbuf, vertex *vcur, int umin, int uma
 void video_hard_render(int drawn_fb) {
 	gpu_target_screen(drawn_fb);
 
-	int start_eye = eye_count == 2 ? 0 : tVBOpt.DEFAULT_EYE;
-	int end_eye = start_eye + eye_count;
+	int start_eye = 0;
+	int end_eye = eye_count;
 
 	for (int i = 0; i < AFFINE_CACHE_SIZE; i++) {
 		tileMapCache[i].used = false;
