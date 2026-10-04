@@ -57,6 +57,8 @@ static void render_core(const RenderJob *job) {
     g_displayed_fb = displayed_fb;
     vip_displayed_fb = tVBOpt.DOUBLE_BUFFER ? displayed_fb : 0;
 
+    eye_count = tVBOpt.ANAGLYPH || tVBOpt.RENDERMODE == RM_TOCPU ? 2 : 1;
+
     if (tVBOpt.RENDERMODE == RM_TOGPU || tVBOpt.RENDERMODE == RM_TOCPU || tVBOpt.RENDERMODE == RM_CPUONLY) {
         gpu_soft_to_texture(displayed_fb);
     }
@@ -66,8 +68,6 @@ static void render_core(const RenderJob *job) {
         if (should_flush) flush_core(false);
         if (antiflicker) gpu_blend_default();
     }
-
-    eye_count = tVBOpt.ANAGLYPH || tVBOpt.RENDERMODE == RM_TOCPU ? 2 : 1;
 
     if (rvb->tVIPREG.XPCTRL & XPEN) {
         if (rdsp->CharCacheInvalid) {
@@ -106,6 +106,7 @@ static bool async_allowed(void) {
 static void snapshot_state(RenderJob *job) {
     job->vb = *vb_state;
     job->dsp = tDSPCACHE;
+    memcpy(job->vram + 0x3dc00, (const uint8_t *)vb_state->V810_DISPLAY_RAM.off + 0x3dc00, 0x400);
     job->vb.V810_DISPLAY_RAM.off = (size_t)job->vram;
 }
 

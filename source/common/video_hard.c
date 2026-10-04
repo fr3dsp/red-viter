@@ -453,7 +453,7 @@ void video_hard_render(int drawn_fb) {
 				u16 tileid = cw3 & 0x07ff;
 				if (!tileVisible[tileid]) continue;
 
-				u16 base_x = obj_ptr[0];
+				s16 base_x = (s16)(obj_ptr[0] << 6) >> 6;
 				u16 cw1 = obj_ptr[1];
 				s16 y = *(u8*)&obj_ptr[2];
 				if (y > 224) y = (s8)y;
@@ -468,7 +468,7 @@ void video_hard_render(int drawn_fb) {
 				for (int eye = start_eye; eye < end_eye; eye++) {
 					if (!(cw1 & (0x8000 >> eye)))
 						continue;
-					u16 x = base_x;
+					s16 x = base_x;
 					if (eye == 0)
 						x -= jp;
 					else

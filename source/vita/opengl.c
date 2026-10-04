@@ -25,8 +25,16 @@ static GLuint sChar, sFinal, sAffine;
 
 static GLint charPosLoc, charTexLoc, charSelLoc, charOffsetLoc, charSamplerLoc, charToCpuLoc;
 static GLint affPosLoc, affTexLoc, affSamplerLoc, affRepeatLoc, affStartLoc, affSizeLoc, affVisLoc;
-static GLint finPosLoc, finTexLoc, finVipLoc, finSoftLoc, finOverLoc, finAlphaLoc;
-static GLint finCol0Loc, finCol1Loc, finCol2Loc, finCol3Loc;
+typedef struct {
+    GLint pos, tex, vip, soft, over, alpha, col0, col1, col2, col3, colTex, row;
+} FinalLocs;
+
+static FinalLocs finPlain, finColumn;
+static GLuint sFinalCol;
+static GLuint columnTex;
+static u32 columnPixels[8 * 128];
+static bool columnVarying;
+static bool columnOk;
 
 static float palSel[8][3];
 static bool antiflickerBlend;
@@ -50,6 +58,17 @@ static affvert *affScratch;
 static int affScratchLines;
 
 static const u32 texColors[4] = {0x00000000u, 0xFF0000FFu, 0xFF00FF00u, 0xFFFF0000u};
+
+static u32 pixelLut[256][4];
+static bool scissorOn;
+static int scissorRect[4];
+static bool rowDirty[64];
+
+static void scissor_disable(void) {
+    if (!scissorOn) return;
+    glDisable(GL_SCISSOR_TEST);
+    scissorOn = false;
+}
 
 static const char *kCharVertex =
     "precision highp float;\n"
@@ -151,6 +170,31 @@ static const char *kFinalFragment =
     "    gl_FragColor = vec4(rgb, uAlpha);\n"
     "}\n";
 
+static const char *kFinalColumnFragment =
+    "precision highp float;\n"
+    "uniform sampler2D sVip;\n"
+    "uniform sampler2D sSoft;\n"
+    "uniform sampler2D sCol;\n"
+    "uniform vec3 uCol0;\n"
+    "uniform float uRow;\n"
+    "uniform float uVipOverSoft;\n"
+    "uniform float uAlpha;\n"
+    "varying vec2 vTexCoord;\n"
+    "void main() {\n"
+    "    vec4 vip = texture2D(sVip, vTexCoord);\n"
+    "    vec4 soft = texture2D(sSoft, vTexCoord);\n"
+    "    float vipLit = step(0.001, vip.x + vip.y + vip.z);\n"
+    "    float softEmpty = 1.0 - step(0.001, soft.a);\n"
+    "    float useVip = mix(softEmpty, vipLit, uVipOverSoft);\n"
+    "    vec4 color = mix(soft, vip, useVip);\n"
+    "    float cx = (floor(vTexCoord.y * 128.0) + 0.5) / 128.0;\n"
+    "    vec3 c1 = texture2D(sCol, vec2(cx, (uRow + 0.5) / 8.0)).rgb;\n"
+    "    vec3 c2 = texture2D(sCol, vec2(cx, (uRow + 1.5) / 8.0)).rgb;\n"
+    "    vec3 c3 = texture2D(sCol, vec2(cx, (uRow + 2.5) / 8.0)).rgb;\n"
+    "    vec3 rgb = mix(mix(mix(uCol0, c1, color.x), c2, color.y), c3, color.z);\n"
+    "    gl_FragColor = vec4(rgb, uAlpha);\n"
+    "}\n";
+
 static void log_shader(const char *what, GLuint object, bool program) {
     GLint len = 0;
     if (program) glGetProgramiv(object, GL_INFO_LOG_LENGTH, &len);
@@ -204,10 +248,35 @@ static void make_texture(GLuint tex, int w, int h, int wrap) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
+static void query_final(FinalLocs *f, GLuint prog) {
+    f->pos = glGetAttribLocation(prog, "aPosition");
+    f->tex = glGetAttribLocation(prog, "aTexCoord");
+    f->vip = glGetUniformLocation(prog, "sVip");
+    f->soft = glGetUniformLocation(prog, "sSoft");
+    f->over = glGetUniformLocation(prog, "uVipOverSoft");
+    f->alpha = glGetUniformLocation(prog, "uAlpha");
+    f->col0 = glGetUniformLocation(prog, "uCol0");
+    f->col1 = glGetUniformLocation(prog, "uCol1");
+    f->col2 = glGetUniformLocation(prog, "uCol2");
+    f->col3 = glGetUniformLocation(prog, "uCol3");
+    f->colTex = glGetUniformLocation(prog, "sCol");
+    f->row = glGetUniformLocation(prog, "uRow");
+}
+
 void gpu_init(void) {
+    for (int b = 0; b < 256; b++) {
+        for (int i = 0; i < 4; i++) {
+            pixelLut[b][i] = texColors[(b >> (i * 2)) & 3];
+        }
+    }
+
     sChar = build_shader(kCharVertex, kCharFragment, "tile");
     sAffine = build_shader(kAffineVertex, kAffineFragment, "affine");
     sFinal = build_shader(kFinalVertex, kFinalFragment, "present");
+    sFinalCol = build_shader(kFinalVertex, kFinalColumnFragment, "present columns");
+    GLint colLinked = 0;
+    glGetProgramiv(sFinalCol, GL_LINK_STATUS, &colLinked);
+    columnOk = colLinked != 0;
 
     charPosLoc = glGetAttribLocation(sChar, "aPosition");
     charTexLoc = glGetAttribLocation(sChar, "aTexCoord");
@@ -224,16 +293,8 @@ void gpu_init(void) {
     affSizeLoc = glGetUniformLocation(sAffine, "uWorldSize");
     affVisLoc = glGetUniformLocation(sAffine, "uVisMask");
 
-    finPosLoc = glGetAttribLocation(sFinal, "aPosition");
-    finTexLoc = glGetAttribLocation(sFinal, "aTexCoord");
-    finVipLoc = glGetUniformLocation(sFinal, "sVip");
-    finSoftLoc = glGetUniformLocation(sFinal, "sSoft");
-    finOverLoc = glGetUniformLocation(sFinal, "uVipOverSoft");
-    finAlphaLoc = glGetUniformLocation(sFinal, "uAlpha");
-    finCol0Loc = glGetUniformLocation(sFinal, "uCol0");
-    finCol1Loc = glGetUniformLocation(sFinal, "uCol1");
-    finCol2Loc = glGetUniformLocation(sFinal, "uCol2");
-    finCol3Loc = glGetUniformLocation(sFinal, "uCol3");
+    query_final(&finPlain, sFinal);
+    query_final(&finColumn, sFinalCol);
 
     glGenTextures(1, &transparentPixelTexture);
     glBindTexture(GL_TEXTURE_2D, transparentPixelTexture);
@@ -243,6 +304,9 @@ void gpu_init(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     u32 pixel = 0;
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &pixel);
+
+    glGenTextures(1, &columnTex);
+    make_texture(columnTex, 128, 8, GL_CLAMP_TO_EDGE);
 
     glGenTextures(1, &tileTexture);
     make_texture(tileTexture, 256, 512, GL_CLAMP_TO_EDGE);
@@ -287,6 +351,7 @@ void gpu_init(void) {
 
 void gpu_clear_screen(int start_eye, int end_eye) {
     glDisable(GL_SCISSOR_TEST);
+    scissorOn = false;
     glClearColor(rvb->tVIPREG.BKCOL == 1, rvb->tVIPREG.BKCOL == 2, rvb->tVIPREG.BKCOL == 3, rvb->tVIPREG.BKCOL != 0);
     glClear(GL_COLOR_BUFFER_BIT);
 }
@@ -324,17 +389,40 @@ void gpu_target_screen(int drawn_fb) {
 }
 
 void gpu_target_affine(int cache_id) {
+    scissor_disable();
     glBindFramebuffer(GL_FRAMEBUFFER, tileMapCache[cache_id].target);
     int xoff = cache_id % 4;
     int yoff = cache_id / 4;
     glViewport(512 * xoff, 512 * yoff, 512, 512);
-    gpu_set_scissor(true, 512 * xoff, 512 * yoff, 512 * (xoff + 1), 512 * (yoff + 1));
 }
 
 void gpu_set_scissor(bool enabled, u32 left, u32 top, u32 right, u32 bottom) {
-    if (enabled) glEnable(GL_SCISSOR_TEST);
-    else glDisable(GL_SCISSOR_TEST);
-    glScissor(left, top, right - left, bottom - top);
+    if (!enabled) {
+        scissor_disable();
+        return;
+    }
+    int l = (int)left;
+    int t = (int)top;
+    int r = (int)right;
+    int b = (int)bottom;
+    if (l < 0) l = 0;
+    if (t < 0) t = 0;
+    if (presentFilter == GL_NEAREST && t <= 0 && b >= 384 && ((l == 0 && r >= 224) || (l <= 256 && r >= 480))) {
+        scissor_disable();
+        return;
+    }
+    int w = r > l ? r - l : 0;
+    int h = b > t ? b - t : 0;
+    if (scissorOn && scissorRect[0] == l && scissorRect[1] == t && scissorRect[2] == w && scissorRect[3] == h) return;
+    if (!scissorOn) {
+        glEnable(GL_SCISSOR_TEST);
+        scissorOn = true;
+    }
+    scissorRect[0] = l;
+    scissorRect[1] = t;
+    scissorRect[2] = w;
+    scissorRect[3] = h;
+    glScissor(l, t, w, h);
 }
 
 void gpu_set_opaque(bool opaque) {
@@ -479,7 +567,8 @@ void gpu_draw_affine(WORLD *world, int umin, int vmin, int umax, int vmax, int d
 }
 
 void update_texture_cache_hard(void) {
-    int min_updated = 2048, max_updated = -1;
+    bool any_updated = false;
+    memset(rowDirty, 0, sizeof(rowDirty));
     for (int t = 0; t < 2048; t++) {
         if (!rdsp->CharacterCache[t]) {
             if (blankTile < 0 && !tileVisible[t])
@@ -487,8 +576,8 @@ void update_texture_cache_hard(void) {
             continue;
         }
 
-        if (min_updated > t) min_updated = t;
-        if (max_updated < t) max_updated = t;
+        any_updated = true;
+        rowDirty[t >> 5] = true;
 
         u16 *tile = (u16 *)(rvb->V810_DISPLAY_RAM.off + ((t & 0x600) << 6) + 0x6000 + (t & 0x1ff) * 16);
 
@@ -510,18 +599,25 @@ void update_texture_cache_hard(void) {
 
         for (int y = 0; y < 8; y++) {
             u16 row = *tile++;
-            for (int x = 0; x < 8; x++) {
-                dstbuf[x] = texColors[row & 3];
-                row >>= 2;
-            }
+            memcpy(dstbuf, pixelLut[row & 0xff], 4 * sizeof(u32));
+            memcpy(dstbuf + 4, pixelLut[row >> 8], 4 * sizeof(u32));
             dstbuf += 256;
         }
     }
-    if (min_updated <= max_updated) {
-        int first_row = (min_updated / 32) * 8;
-        int rows = (max_updated / 32 + 1 - min_updated / 32) * 8;
+    if (any_updated) {
         glBindTexture(GL_TEXTURE_2D, tileTexture);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, first_row, 256, rows, GL_RGBA, GL_UNSIGNED_BYTE, tileTextureBuffer + first_row * 256);
+        int row = 0;
+        while (row < 64) {
+            if (!rowDirty[row]) {
+                row++;
+                continue;
+            }
+            int start = row;
+            int end = row + 1;
+            while (end < 64 && (rowDirty[end] || (end + 1 < 64 && rowDirty[end + 1]))) end++;
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, start * 8, 256, (end - start) * 8, GL_RGBA, GL_UNSIGNED_BYTE, tileTextureBuffer + start * 8 * 256);
+            row = end;
+        }
     }
 }
 
@@ -539,15 +635,16 @@ void gpu_soft_to_texture(int displayed_fb) {
 
             for (int y = 0; y < 224 / 16; y++) {
                 uint32_t blob = *in_fb_ptr++;
-                for (int i = 0; i < 16; i++) {
-                    *out_fb++ = texColors[blob & 3];
-                    blob >>= 2;
+                for (int i = 0; i < 4; i++) {
+                    memcpy(out_fb, pixelLut[blob & 0xff], 4 * sizeof(u32));
+                    out_fb += 4;
+                    blob >>= 8;
                 }
             }
         }
     }
     glBindTexture(GL_TEXTURE_2D, screenTexSoft[displayed_fb]);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 512, 512, GL_RGBA, GL_UNSIGNED_BYTE, screenTexSoftBuffer);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 512, 384, GL_RGBA, GL_UNSIGNED_BYTE, screenTexSoftBuffer);
 }
 
 static bool downloaded;
@@ -634,6 +731,38 @@ static void present_rect(int *x, int *y, int *w, int *h) {
     *y = (sh - dh) / 2;
 }
 
+static void column_update(void) {
+    const u8 *table = (const u8 *)rvb->V810_DISPLAY_RAM.off + 0x3dc01;
+    int mn = 255, mx = 0;
+    for (int t = 0; t < 2; t++) {
+        for (int g = 0; g < 96; g++) {
+            int r = table[t * 512 + (255 - g) * 2];
+            if (r < mn) mn = r;
+            if (r > mx) mx = r;
+        }
+    }
+    maxRepeat = (uint8_t)(mx + 1 > 255 ? 255 : mx + 1);
+    columnVarying = columnOk && mn != mx;
+    if (!columnVarying) return;
+
+    int brtA = rvb->tVIPREG.BRTA;
+    int brtB = rvb->tVIPREG.BRTB;
+    int brtC = rvb->tVIPREG.BRTC;
+    for (int t = 0; t < 2; t++) {
+        for (int g = 0; g < 96; g++) {
+            int rep = 1 + table[t * 512 + (255 - g) * 2];
+            int c1 = video_get_colour(1, brtA * rep);
+            int c2 = video_get_colour(2, brtB * rep);
+            int c3 = video_get_colour(3, (brtA + brtB + brtC) * rep);
+            columnPixels[(t * 3 + 0) * 128 + g] = (u32)(c1 & 0xffffff) | 0xff000000u;
+            columnPixels[(t * 3 + 1) * 128 + g] = (u32)(c2 & 0xffffff) | 0xff000000u;
+            columnPixels[(t * 3 + 2) * 128 + g] = (u32)(c3 & 0xffffff) | 0xff000000u;
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, columnTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 128, 6, GL_RGBA, GL_UNSIGNED_BYTE, columnPixels);
+}
+
 bool gpu_take_flushed(void) {
     bool r = flushedSinceTake;
     flushedSinceTake = false;
@@ -645,8 +774,8 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
     int px, py, pw, ph;
     present_rect(&px, &py, &pw, &ph);
 
+    scissor_disable();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, SCREEN_W, SCREEN_H);
 
     if (!antiflickerBlend) {
@@ -655,10 +784,13 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
         glClear(GL_COLOR_BUFFER_BIT);
     }
 
+    column_update();
+    const FinalLocs *F = columnVarying ? &finColumn : &finPlain;
+
     glViewport(px, py, pw, ph);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(sFinal);
+    glUseProgram(columnVarying ? sFinalCol : sFinal);
 
     GLuint vipTex = tVBOpt.RENDERMODE != RM_TOCPU ? screenTexHard[vip_displayed_fb] : transparentPixelTexture;
     GLuint softTex = rdsp->DDSPDataState[displayed_fb] != GPU_CLEAR ? screenTexSoft[displayed_fb] : transparentPixelTexture;
@@ -669,7 +801,7 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, presentFilter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, presentFilter);
     }
-    glUniform1i(finVipLoc, 0);
+    glUniform1i(F->vip, 0);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, softTex);
@@ -677,18 +809,27 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, presentFilter);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, presentFilter);
     }
-    glUniform1i(finSoftLoc, 1);
+    glUniform1i(F->soft, 1);
 
-    glUniform1f(finOverLoc, tVBOpt.VIP_OVER_SOFT ? 1.0f : 0.0f);
-    glUniform1f(finAlphaLoc, antiflickerBlend ? 0.5f : 1.0f);
+    if (columnVarying) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, columnTex);
+        glUniform1i(F->colTex, 2);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    glUniform1f(F->over, tVBOpt.VIP_OVER_SOFT ? 1.0f : 0.0f);
+    glUniform1f(F->alpha, antiflickerBlend ? 0.5f : 1.0f);
 
     int a = rvb->tVIPREG.BRTA * maxRepeat;
     int b = rvb->tVIPREG.BRTB * maxRepeat;
     int c = (rvb->tVIPREG.BRTA + rvb->tVIPREG.BRTB + rvb->tVIPREG.BRTC) * maxRepeat;
-    set_color_uniform(finCol0Loc, 0, 0);
-    set_color_uniform(finCol1Loc, 1, a);
-    set_color_uniform(finCol2Loc, 2, b);
-    set_color_uniform(finCol3Loc, 3, c);
+    set_color_uniform(F->col0, 0, 0);
+    if (!columnVarying) {
+        set_color_uniform(F->col1, 1, a);
+        set_color_uniform(F->col2, 2, b);
+        set_color_uniform(F->col3, 3, c);
+    }
 
     static const GLfloat positions[] = {
         -1, -1,
@@ -706,10 +847,11 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
         texcoords[i * 2] += 0.5f * eye_shift;
     }
 
-    glEnableVertexAttribArray(finPosLoc);
-    glEnableVertexAttribArray(finTexLoc);
-    glVertexAttribPointer(finPosLoc, 2, GL_FLOAT, GL_FALSE, 0, positions);
-    glVertexAttribPointer(finTexLoc, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
+    glEnableVertexAttribArray(F->pos);
+    glEnableVertexAttribArray(F->tex);
+    glVertexAttribPointer(F->pos, 2, GL_FLOAT, GL_FALSE, 0, positions);
+    glVertexAttribPointer(F->tex, 2, GL_FLOAT, GL_FALSE, 0, texcoords);
+    if (columnVarying) glUniform1f(F->row, eye_shift * 3.0f);
 
     if (tVBOpt.ANAGLYPH) {
         glColorMask(tVBOpt.ANAGLYPH_LEFT & 1, tVBOpt.ANAGLYPH_LEFT & 2, tVBOpt.ANAGLYPH_LEFT & 4, GL_TRUE);
@@ -718,14 +860,15 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
             texcoords[i * 2] += 0.5f;
         }
         glColorMask(tVBOpt.ANAGLYPH_RIGHT & 1, tVBOpt.ANAGLYPH_RIGHT & 2, tVBOpt.ANAGLYPH_RIGHT & 4, GL_TRUE);
+        if (columnVarying) glUniform1f(F->row, 3.0f);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     } else {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
 
-    glDisableVertexAttribArray(finPosLoc);
-    glDisableVertexAttribArray(finTexLoc);
+    glDisableVertexAttribArray(F->pos);
+    glDisableVertexAttribArray(F->tex);
 }
 
 void gpu_quit(void) {
