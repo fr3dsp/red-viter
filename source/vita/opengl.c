@@ -212,11 +212,19 @@ static void log_shader(const char *what, GLuint object, bool program) {
 
 static GLuint compile_stage(GLenum type, const char *source, const char *what) {
     GLuint shader = glCreateShader(type);
+    if (!shader) {
+        vita_log("%s creation failed", what);
+        return 0;
+    }
     glShaderSource(shader, 1, &source, NULL);
     glCompileShader(shader);
     GLint ok = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-    if (!ok) log_shader(what, shader, false);
+    if (!ok) {
+        log_shader(what, shader, false);
+        glDeleteShader(shader);
+        return 0;
+    }
     return shader;
 }
 
@@ -226,15 +234,33 @@ static GLuint build_shader(const char *vs, const char *fs, const char *name) {
     GLuint v = compile_stage(GL_VERTEX_SHADER, vs, what);
     snprintf(what, sizeof(what), "%s fragment shader", name);
     GLuint f = compile_stage(GL_FRAGMENT_SHADER, fs, what);
+    if (!v || !f) {
+        if (v) glDeleteShader(v);
+        if (f) glDeleteShader(f);
+        return 0;
+    }
+
     GLuint program = glCreateProgram();
+    if (!program) {
+        glDeleteShader(v);
+        glDeleteShader(f);
+        vita_log("%s program creation failed", name);
+        return 0;
+    }
+
     glAttachShader(program, v);
     glAttachShader(program, f);
     glLinkProgram(program);
+    glDeleteShader(v);
+    glDeleteShader(f);
+
     GLint linked = 0;
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
     if (!linked) {
         snprintf(what, sizeof(what), "%s program link", name);
         log_shader(what, program, true);
+        glDeleteProgram(program);
+        return 0;
     }
     return program;
 }
@@ -264,6 +290,12 @@ static void query_final(FinalLocs *f, GLuint prog) {
 }
 
 void gpu_init(void) {
+    scissorOn = false;
+    antiflickerBlend = false;
+    flushedSinceTake = false;
+    columnVarying = false;
+    columnOk = false;
+
     for (int b = 0; b < 256; b++) {
         for (int i = 0; i < 4; i++) {
             pixelLut[b][i] = texColors[(b >> (i * 2)) & 3];
@@ -275,7 +307,7 @@ void gpu_init(void) {
     sFinal = build_shader(kFinalVertex, kFinalFragment, "present");
     sFinalCol = build_shader(kFinalVertex, kFinalColumnFragment, "present columns");
     GLint colLinked = 0;
-    glGetProgramiv(sFinalCol, GL_LINK_STATUS, &colLinked);
+    if (sFinalCol) glGetProgramiv(sFinalCol, GL_LINK_STATUS, &colLinked);
     columnOk = colLinked != 0;
 
     charPosLoc = glGetAttribLocation(sChar, "aPosition");
@@ -854,6 +886,37 @@ void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb) {
 }
 
 void gpu_quit(void) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+
+    if (tileMapCache[0].target) glDeleteFramebuffers(1, &tileMapCache[0].target);
+    if (screenTargetHard[0] || screenTargetHard[1]) glDeleteFramebuffers(2, screenTargetHard);
+
+    if (tileMapCache[0].tex) glDeleteTextures(1, &tileMapCache[0].tex);
+    if (screenTexHard[0] || screenTexHard[1]) glDeleteTextures(2, screenTexHard);
+    if (screenTexSoft[0] || screenTexSoft[1]) glDeleteTextures(2, screenTexSoft);
+    if (tileTexture) glDeleteTextures(1, &tileTexture);
+    if (columnTex) glDeleteTextures(1, &columnTex);
+    if (transparentPixelTexture) glDeleteTextures(1, &transparentPixelTexture);
+
+    if (sChar) glDeleteProgram(sChar);
+    if (sAffine) glDeleteProgram(sAffine);
+    if (sFinal) glDeleteProgram(sFinal);
+    if (sFinalCol) glDeleteProgram(sFinalCol);
+
+    memset(screenTargetHard, 0, sizeof(screenTargetHard));
+    memset(screenTexHard, 0, sizeof(screenTexHard));
+    memset(screenTexSoft, 0, sizeof(screenTexSoft));
+    tileMapCache[0].target = 0;
+    tileMapCache[0].tex = 0;
+    tileTexture = 0;
+    columnTex = 0;
+    transparentPixelTexture = 0;
+    sChar = 0;
+    sAffine = 0;
+    sFinal = 0;
+    sFinalCol = 0;
+
     free(tileTextureBuffer);
     free(screenTexSoftBuffer);
     free(tileScratch);
