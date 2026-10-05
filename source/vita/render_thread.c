@@ -1,5 +1,6 @@
 #include <string.h>
-
+#include <vitaGL.h>
+#include "vita_ui.h"
 #include "render_thread.h"
 
 static RenderJob job;
