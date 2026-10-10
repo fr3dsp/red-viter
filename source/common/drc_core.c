@@ -309,19 +309,10 @@ static void jump_target(WORD target) {
     }
 }
 
-static void exit_const(WORD target, int cyc, bool checked) {
+static void exit_const(WORD target, int cyc) {
     norm_flags();
-    if (checked) {
-        event_check(cyc, false, target);
-        mov_imm(1, target);
-    } else {
-        mov_imm(1, target);
-    }
-    if (!checked && cyc) {
-        E(i_ldst(C_AL, 1, 2, ST, OFF_PARTIAL));
-        addsub_imm(2, 2, -cyc, 0);
-        E(i_ldst(C_AL, 0, 2, ST, OFF_PARTIAL));
-    }
+    event_check(cyc, false, target);
+    mov_imm(1, target);
     jump_target(target);
 }
 
@@ -705,7 +696,7 @@ static tres tr_inst(WORD pc, WORD *next) {
             return T_CONT;
         }
         if (p.kind == K_ALWAYS) {
-            exit_const(target, t_cyc, target <= pc);
+            exit_const(target, t_cyc);
             t_cyc = 0;
             t_last = opcode;
             return T_END;
@@ -713,10 +704,10 @@ static tres tr_inst(WORD pc, WORD *next) {
         WORD *fix[2];
         int nfix = emit_branch_if(p, fix);
         int sv_inv = t_inv, sv_vz = t_vz;
-        exit_const(pc + 2, t_cyc - 2, false);
+        exit_const(pc + 2, t_cyc - 2);
         t_inv = sv_inv; t_vz = sv_vz;
         for (int i = 0; i < nfix; i++) patch_b(fix[i], ep);
-        exit_const(target, t_cyc, target <= pc);
+        exit_const(target, t_cyc);
         t_cyc = 0;
         t_last = opcode;
         return T_END;
@@ -751,7 +742,7 @@ static tres tr_inst(WORD pc, WORD *next) {
             if (disp & 0x02000000) disp |= 0xFC000000;
             else disp &= ~0xFC000000;
             WORD target = pc + disp;
-            exit_const(target, t_cyc, target <= pc);
+            exit_const(target, t_cyc);
             t_cyc = 0;
             t_last = opcode;
             return T_END;
@@ -836,14 +827,14 @@ static WORD *translate(WORD pc) {
                 entry_map[idx] = (WORD)(uintptr_t)stub_resolve;
                 return NULL;
             }
-            exit_const(cur, t_cyc, false);
+            exit_const(cur, t_cyc);
             break;
         }
         n++;
         cur = next;
         if (r == T_END) break;
         if (n >= DRC_MAX_V810_INST) {
-            exit_const(cur, t_cyc, false);
+            exit_const(cur, t_cyc);
             break;
         }
     }
