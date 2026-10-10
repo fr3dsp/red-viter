@@ -1,5 +1,6 @@
 #include <psp2/ctrl.h>
 #include <psp2/io/dirent.h>
+#include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -84,6 +85,7 @@ static int stateSlot = 0;
 static unsigned int heldPrev;
 static int repeatFrames;
 static volatile int resumePending;
+static volatile int powerWasSuspended;
 static volatile int callbackRunning;
 static SceUID callbackThread = -1;
 static bool psButtonLocked;
@@ -105,9 +107,12 @@ static int power_callback(int notifyId, int notifyCount, int powerInfo, void *co
     (void)notifyId;
     (void)notifyCount;
     (void)common;
-    if (powerInfo & (SCE_POWER_CB_APP_RESUME | SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_AFTER_SYSTEM_RESUME)) {
-        drc_reopen_vm();
+    if (powerInfo & (SCE_POWER_CB_APP_SUSPEND | SCE_POWER_CB_SYSTEM_SUSPEND)) {
+        powerWasSuspended = 1;
+    }
+    if ((powerInfo & (SCE_POWER_CB_APP_RESUME | SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_AFTER_SYSTEM_RESUME)) && powerWasSuspended) {
         resumePending = 1;
+        powerWasSuspended = 0;
     }
     return 0;
 }
@@ -151,7 +156,7 @@ static void callback_thread_stop(void) {
 }
 
 static uint64_t now_us(void) {
-    return sceKernelGetProcessTimeWide();
+    return (uint64_t)sceKernelGetSystemTimeWide();
 }
 
 static int cfg_handler(void *user, const char *section, const char *name, const char *value) {
@@ -198,14 +203,44 @@ static unsigned int pad_pressed(const SceCtrlData *pad, bool allow_repeat) {
     return pressed;
 }
 
+static int vita_save_sram(void) {
+    if (!is_sram || !tVBOpt.RAM_PATH[0]) return 0;
+
+    V810_MEMORYFETCH *sram = &vb_players[my_player_id].V810_GAME_RAM;
+    if (!sram->pmemory || !sram->size) return -1;
+
+    SceUID fd = sceIoOpen(tVBOpt.RAM_PATH,
+                         SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    if (fd < 0) return fd;
+
+    unsigned int written = 0;
+    const unsigned int total = (unsigned int)sram->size;
+    int error = 0;
+    while (written < total) {
+        unsigned int remaining = total - written;
+        SceSize count = (SceSize)(remaining < 4096 ? remaining : 4096);
+        int result = sceIoWrite(fd, sram->pmemory + written, count);
+        if (result <= 0 || (unsigned int)result > (unsigned int)count) {
+            error = result < 0 ? result : -1;
+            break;
+        }
+        written += (unsigned int)result;
+    }
+
+    int closed = sceIoClose(fd);
+    if (!error && closed < 0) error = closed;
+    return error;
+}
+
 static void wait_release(void) {
     SceCtrlData pad;
+    uint64_t deadline = now_us() + 600000;
     do {
-        ui_begin(0, 0, 0);
-        ui_end();
         read_pad(&pad);
-    } while (pad.buttons != 0);
-    heldPrev = 0;
+        if (!pad.buttons || now_us() >= deadline) break;
+        sceKernelDelayThread(10000);
+    } while (1);
+    heldPrev = pad.buttons;
     repeatFrames = 0;
 }
 
@@ -461,7 +496,7 @@ static void load_error_text(int code, char *out, size_t size) {
 }
 
 static bool load_rom(const char *path) {
-    save_sram();
+    vita_save_sram();
 
     if (tVBOpt.GAME_SETTINGS) loadFileOptions();
 
@@ -566,7 +601,6 @@ static int pause_menu(bool *reset_requested) {
     int action = ACT_RESUME;
 
     sound_pause();
-    save_sram();
     wait_release();
     ps_button_unlock();
 
@@ -785,6 +819,7 @@ static void clear_hard_targets(void) {
 }
 
 static int run_game(void) {
+    bool ps_button_was_down = false;
     bool on_time = false;
     bool just_lagged = false;
     bool display_blanked = false;
@@ -811,9 +846,15 @@ static int run_game(void) {
         SceCtrlData pad;
         read_pad(&pad);
 
-        if (pad.buttons & SCE_CTRL_PSBUTTON) {
+        bool ps_button_down = (pad.buttons & SCE_CTRL_PSBUTTON) != 0;
+        bool open_pause_menu = ps_button_down && !ps_button_was_down;
+        ps_button_was_down = ps_button_down;
+        if (open_pause_menu) {
             bool reset = false;
             int act = pause_menu(&reset);
+            SceCtrlData after_menu_pad;
+            read_pad(&after_menu_pad);
+            ps_button_was_down = (after_menu_pad.buttons & SCE_CTRL_PSBUTTON) != 0;
             if (act == ACT_QUIT || act == ACT_BROWSER) {
                 action = act;
                 break;
@@ -935,7 +976,7 @@ static int run_game(void) {
         }
     }
 
-    save_sram();
+    vita_save_sram();
     sound_pause();
     ps_button_unlock();
     return action;
@@ -975,7 +1016,7 @@ int main(void) {
         action = run_game();
     }
 
-    save_sram();
+    vita_save_sram();
     sound_close();
     video_quit();
     ps_button_unlock();

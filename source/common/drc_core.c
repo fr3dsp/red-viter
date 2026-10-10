@@ -322,6 +322,13 @@ static void exit_dyn(int cyc) {
     E(i_b(C_AL, ep, stub_dyn));
 }
 
+static void poll_before_mem(WORD pc, int current_cycles) {
+    int prior_cycles = t_cyc - current_cycles;
+    norm_flags();
+    event_check(prior_cycles, false, pc);
+    t_cyc = current_cycles;
+}
+
 typedef struct {
     int kind;
     int c1;
@@ -626,8 +633,8 @@ static tres tr_inst(WORD pc, WORD *next) {
                 t_last = opcode;
                 return T_END;
             case V810_OP_HALT:
+                poll_before_mem(pc, opcycle[opcode]);
                 flush_cycles();
-                norm_flags();
                 mov_imm(1, (pc + 2) | 1);
                 E(i_mrs(0));
                 E(i_ldst(C_AL, 1, 3, ST, OFF_IRQ));
@@ -769,21 +776,25 @@ static tres tr_inst(WORD pc, WORD *next) {
         case V810_OP_LD_B: case V810_OP_LD_H: case V810_OP_LD_W:
         case V810_OP_IN_B: case V810_OP_IN_H: case V810_OP_IN_W: {
             int w = (opcode & 3) == 3;
-            t_cyc += load_adjust(w);
+            int adjust = load_adjust(w);
             int kind = opcode & 3;
             int helper = kind == 0 ? H_RBYTE : kind == 1 ? H_RHWORD : H_RWORD;
             int ext;
             if (opcode < 0x38) ext = kind == 0 ? 1 : kind == 1 ? 2 : 0;
             else ext = kind == 0 ? 3 : kind == 1 ? 4 : 0;
+            poll_before_mem(pc, opcycle[opcode]);
             emit_mem_load(helper, reg1, reg2, (SHWORD)ins2, ext);
+            t_cyc += adjust;
             break;
         }
         case V810_OP_ST_B: case V810_OP_ST_H: case V810_OP_ST_W:
         case V810_OP_OUT_B: case V810_OP_OUT_H: case V810_OP_OUT_W: {
             int kind = opcode & 3;
-            t_cyc += store_adjust(kind == 3);
+            int adjust = store_adjust(kind == 3);
             int helper = kind == 0 ? H_WBYTE : kind == 1 ? H_WHWORD : H_WWORD;
+            poll_before_mem(pc, opcycle[opcode]);
             emit_mem_store(helper, reg1, reg2, (SHWORD)ins2, kind == 0 ? 1 : kind == 1 ? 2 : 0);
+            t_cyc += adjust;
             break;
         }
         case V810_OP_FPP:
@@ -1070,9 +1081,9 @@ int drc_handleInterrupts(WORD cpsr, WORD *PCp) {
 #endif
         return cpsr;
     }
-    predictEvent(true);
-    int r = serviceInt(st->cycles, pc);
-    if (r && (pc != st->PC || st->ret)) {
+    sync_time();
+    serviceInt(st->cycles, pc);
+    if (pc != st->PC || st->ret) {
 #ifdef DRC_HOST_SIM
         sim_unwind();
 #else

@@ -20,6 +20,11 @@ enum {
 };
 
 extern bool drc_ready;
+extern volatile WORD drc_watch_phase;
+extern volatile WORD drc_watch_pc;
+extern volatile WORD drc_watch_irq;
+extern volatile WORD drc_watch_translation;
+void drc_diag_snapshot(WORD counts[5]);
 
 int drc_handleInterrupts(WORD cpsr, WORD *PC);
 void drc_relocTable(void);

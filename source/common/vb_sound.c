@@ -22,7 +22,8 @@ static volatile bool paused = false;
 
 static const int noise_bits[8] = {14, 10, 13, 4, 8, 6, 9, 11};
 
-static short dc_offset = 0;
+static int32_t filter_left;
+static int32_t filter_right;
 
 #define SNDMEM(x) (vb_state->V810_SOUND_RAM.pmemory[(x) & 0xFFF])
 #define GET_FREQ(ch) ((SNDMEM(S1FQL + 0x40 * ch) | (SNDMEM(S1FQH + 0x40 * ch) << 8)) & 0x7ff)
@@ -196,27 +197,21 @@ void sound_update(uint32_t cycles) {
         buf_pos += samples;
         remaining_samples -= samples;
         if (buf_pos == SAMPLE_COUNT) {
-            // final post processing
             for (int i = 0; i < SAMPLE_COUNT; i++) {
-                #define AMPLIFY(x) (((x) >> 4) * 95)
-                short left = AMPLIFY(wavebufs[sound_fill_buf][i * 2]) + dc_offset;
-                short right = AMPLIFY(wavebufs[sound_fill_buf][i * 2 + 1]) + dc_offset;
-                #undef AMPLIFY
-                int extra_offset = dc_offset - (-left - right + dc_offset * 48) / 50;
-                if (left < dc_offset || right < dc_offset) {
-                    extra_offset = 0;
-                    if (left < dc_offset)
-                        extra_offset = left - 0x7fff;
-                    if (right < dc_offset && right - 0x7fff > extra_offset)
-                        extra_offset = right - 0x7fff;
-                }
-                left -= extra_offset;
-                right -= extra_offset;
-                dc_offset -= extra_offset;
-                if (dc_offset != 0) {
-                    wavebufs[sound_fill_buf][i * 2] = left;
-                    wavebufs[sound_fill_buf][i * 2 + 1] = right;
-                }
+                int32_t left = wavebufs[sound_fill_buf][i * 2];
+                int32_t right = wavebufs[sound_fill_buf][i * 2 + 1];
+                int32_t left_q8 = left << 8;
+                int32_t right_q8 = right << 8;
+                filter_left += (left_q8 - filter_left) >> 13;
+                filter_right += (right_q8 - filter_right) >> 13;
+                int32_t output_left = ((left_q8 - filter_left) * 5) / 512;
+                int32_t output_right = ((right_q8 - filter_right) * 5) / 512;
+                if (output_left > 32767) output_left = 32767;
+                if (output_left < -32768) output_left = -32768;
+                if (output_right > 32767) output_right = 32767;
+                if (output_right < -32768) output_right = -32768;
+                wavebufs[sound_fill_buf][i * 2] = (int16_t)output_left;
+                wavebufs[sound_fill_buf][i * 2 + 1] = (int16_t)output_right;
             }
             // push
             if (sound_push_backend(wavebufs[sound_fill_buf])) {
@@ -351,6 +346,9 @@ void sound_resume(void) {
 }
 
 void sound_reset(void) {
+    filter_left = 0;
+    filter_right = 0;
+    buf_pos = 0;
     memset(&sound_state, 0, sizeof(sound_state));
     for (int i = 0; i < 6; i++) {
         SNDMEM(S1INT + 0x40 * i) = 0;
