@@ -65,4 +65,5 @@ void gpu_blend_antiflicker(void);
 void gpu_blend_default(void);
 bool gpu_antiflicker_allowed(void);
 void gpu_flush(bool default_for_both, int displayed_fb, int vip_displayed_fb);
+void gpu_present(void);
 void gpu_quit(void);
